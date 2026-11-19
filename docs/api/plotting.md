@@ -2,6 +2,8 @@
 
 `matplotlib` and `plotnine` renderers for V-plots, differential V-plots, faceted collections, insert-size QC, nucleosome phasograms, and cut-site footprints.
 
+![WT ChEC-seq V-plot and Mutant vs. WT Differential V-plot](../img/vplot_hero.png)
+
 ::: pyvplot.plotting.plot_vplot_matplotlib
 
 ::: pyvplot.plotting.plot_vplot_plotnine

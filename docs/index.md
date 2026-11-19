@@ -2,6 +2,8 @@
 
 Fast, assay-aware Python toolkit for **paired-end fragment geometry, V-plots, 1-bp cleavage cut-site footprints, size-stratified signal matrices, and nucleosome phasing** tailored to **ChEC-seq, ATAC-seq, CUT&RUN / CUT&Tag, MNase-seq, and ChIP-exo**.
 
+![WT ChEC-seq V-plot and Mutant vs. WT Differential V-plot](img/vplot_hero.png)
+
 ## Core Principles
 
 - **Extract once, analyze everything:** Convert BAM, BED/BEDPE, or 10x/ArchR `.frag.tsv.gz` files into a compact, sorted per-chromosome [`FragmentStore`](api/store.md) (`.npz` or `.parquet`). Repeated queries across 10k–100k motif hits (`moodspy`) or TSSs run in milliseconds via binary search + Numba (`@njit(parallel=True)`), with an exact pure-NumPy fallback.

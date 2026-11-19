@@ -78,3 +78,4 @@ markdown_extensions:
 
 exclude_docs: |
   run_docs.py
+  make_figures.py

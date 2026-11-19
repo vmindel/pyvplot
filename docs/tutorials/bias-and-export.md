@@ -55,6 +55,10 @@ print(f"Std before correction: {raw_mat.values.std():.3f}, after correction: {co
 Std before correction: 11.611, after correction: 0.000001
 ```
 
+Applying `KmerBiasTable.correct_matrix()` around a protected motif removes strong sequence-specific enzyme cleavage spikes while preserving the true underlying TF footprint:
+
+![Cut-site profile before and after KmerBiasTable cleavage bias correction](../img/bias_correction.png)
+
 ## Exporting size-stratified tracks
 
 Export binned midpoint, cleavage-cut, or exact average-coverage tracks to a DataFrame, `bedGraph` / `.bedGraph.gz`, `BigWig` (`pyBigWig`), or `pymisha` (sparse/dense):

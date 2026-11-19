@@ -56,6 +56,10 @@ print(df_fp.groupby("strand")["signal"].sum().to_dict())
 {'+': 86.0, '-': 140.0}
 ```
 
+Render with `fp.plot()` alongside size-stratified `mat_tf.mean_profile(ci=0.95)` and `mat_nuc.mean_profile(ci=0.95)`:
+
+![1-bp strand-separated cleavage cut-site footprint and size-stratified midpoint profiles](../img/cut_site_footprint.png)
+
 ## Per-anchor motif protection & footprint depth scores
 
 `footprint_score()` summarizes each anchor's flanking-vs-center cleavage ratio, producing a per-anchor table ready to sort heatmaps or attach as a 1D covariate / `BarTrack`:

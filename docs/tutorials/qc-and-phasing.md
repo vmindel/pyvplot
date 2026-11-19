@@ -30,6 +30,10 @@ bands: {'nfr': 0.6, 'mononucleosome': 0.4, 'dinucleosome': 0.0}
 FRiP: 0.64
 ```
 
+Plotting an ATAC-seq store with `plot_insert_size_matplotlib(..., show_bands=True)` automatically shades the assay's NFR, mononucleosome, and dinucleosome size regimes on both linear and log10 scales:
+
+![ATAC-seq insert-size distribution with shaded nucleosome bands](../img/insert_size_qc.png)
+
 ## Nucleosome phasogram & NRL estimation
 
 `phasogram()` computes exact pair-distance histograms in `[1, max_lag]` bp via a Numba sliding-window kernel and estimates the **Nucleosome Repeat Length (NRL)** via both harmonic peak-spacing regression (`nrl_peak_fit`, `r_squared`) and FFT periodogram (`nrl_fft`).
@@ -59,3 +63,7 @@ print(f"Estimated NRL: {ph.nrl:.1f} bp (FFT: {ph.nrl_fft:.1f} bp, R^2: {ph.r_squ
 ```text
 Estimated NRL: 185.0 bp (FFT: 186.2 bp, R^2: 1.0000)
 ```
+
+Calling `ph.plot()` overlays the raw pair counts, smoothed phasogram, detected nucleosome harmonics, and estimated NRL:
+
+![Nucleosome phasogram with detected periodic peaks and 185 bp NRL estimate](../img/phasogram_nrl.png)

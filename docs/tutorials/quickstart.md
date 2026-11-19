@@ -90,3 +90,7 @@ print("TF matrix shape:", mat_tf.shape, "len_range:", mat_tf.len_range)
 VPlot shape: (36, 100) total hits: 750
 TF matrix shape: (10, 50) len_range: (20, 120)
 ```
+
+Calling `v.normalize("expected").plot()` and `vp_mut.diff(vp_wt).plot()` renders publication-ready V-plots and differential V-plots directly:
+
+![WT ChEC-seq V-plot and Differential V-plot](../img/vplot_hero.png)

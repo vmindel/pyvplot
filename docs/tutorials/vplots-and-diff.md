@@ -97,3 +97,13 @@ p = vp_oe.plot_plotnine(cmap="magma", title="WT ChEC-seq (O/E)")
 p_facet = coll.plot_plotnine(facet="tf ~ condition")
 fig, ax = vp_diff.plot(title="Mutant vs WT (log2FC)")
 ```
+
+### Expected figures
+
+Comparing **CPM** (where abundant ~150 bp flanking nucleosomes dominate the dynamic range), **row-wise expected/background normalization** (which rescues the short 40–100 bp TF V-arms), and the **differential `log2FC` V-plot** (blue TF V loss + red central nucleosome invasion upon TF knockout):
+
+![Comparison of CPM, expected-normalized, and differential V-plots](../img/vplot_norm_comparison.png)
+
+Multi-condition faceting directly from `VPlotCollection.plot_plotnine(facet="tf ~ condition")`:
+
+![Faceted plotnine VPlotCollection across transcription factors and conditions](../img/vplot_plotnine_facet.png)
