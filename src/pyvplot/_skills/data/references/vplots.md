@@ -41,7 +41,7 @@ vp_sm = vp_oe.smooth(sigma=(1.5, 1.5))
 vp_diff = vp_mut.diff(
     vp_wt,
     mode="log2fc",          # "log2fc", "subtract", "ratio", "zscore"
-    pseudocount=None,       # default: half a raw count per cell in each sample's units (depth-invariant)
+    pseudocount=None,       # default: half a raw count per cell, shared by both samples (depth-invariant; empty-in-both cells = 0)
     smooth_sigma=(1.5, 1.5),
     normalize_first="cpm",  # auto-normalizes raw VPlots to CPM before differencing
     smooth_before=True,

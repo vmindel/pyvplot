@@ -163,3 +163,19 @@ def test_diff_log2fc_does_not_depend_on_off_target_depth():
     )
     np.testing.assert_allclose(deep.counts, shallow.counts, atol=1e-9)
     assert shallow.counts.min() < -3
+
+
+def test_diff_cells_empty_in_both_samples_are_zero_at_unequal_depth():
+    """A shared pseudocount: no signal in either sample means log2FC 0, whatever the depths."""
+    wt, anchors = vp.datasets.simulate_chec(n_sites=30, seed=1)
+    ko, _ = vp.datasets.simulate_chec(n_sites=30, tf_fragments=0, seed=2)
+    s = np.arange(10_000_000, 10_000_000 + 1_000 * 50_000, 1_000, dtype=np.int64)
+    extra = vp.FragmentStore.from_arrays({"chr1": s}, {"chr1": s + 100}, assay="chec")
+    deep_ko = vp.FragmentStore.merge([ko, extra])  # ~10x deeper, all off-target
+
+    kw = dict(flank=250, min_len=20, max_len=400, pos_bin=10, len_bin=10)
+    a, b = deep_ko.vplot(anchors, **kw), wt.vplot(anchors, **kw)
+    both_empty = (a.counts == 0) & (b.counts == 0)
+    assert both_empty.sum() > 10
+    d = a.diff(b)
+    np.testing.assert_array_equal(d.counts[both_empty], 0.0)

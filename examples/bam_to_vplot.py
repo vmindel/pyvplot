@@ -4,7 +4,7 @@
     python bam_to_vplot.py --bam sample.bam --motifs motifs.bed --out results/sample
 
 Outputs (all prefixed by --out):
-    .frags.npz             fragment store; reused on the next run if newer than the BAM
+    .frags.npz             fragment store; reused if newer than the BAM and built with the same settings
     .qc.json               fragment counts, length stats, size-bin fractions
     .vplot.png             V-plot, CPM and flank-normalised side by side
     .vplot.tsv.gz          tidy V-plot (pos, length, value) for ggplot2
@@ -42,9 +42,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def load_store(args: argparse.Namespace) -> vp.FragmentStore:
     cache = args.out.with_name(args.out.name + ".frags.npz")
+    settings = {
+        "bam": str(args.bam.resolve()),
+        "assay": args.assay,
+        "min_mapq": args.min_mapq,
+        "exclude_chroms": sorted(args.exclude_chroms),
+        "dedup": args.dedup,
+    }
     if cache.exists() and cache.stat().st_mtime > args.bam.stat().st_mtime:
-        print(f"Loading cached store {cache}")
-        return vp.FragmentStore.load(cache)
+        store = vp.FragmentStore.load(cache)
+        if store.metadata.get("ingest_settings") == settings:
+            print(f"Loading cached store {cache}")
+            return store
+        print("Ingestion settings changed; rebuilding the store")
     print(f"Reading {args.bam}")
     store = vp.FragmentStore.from_bam(
         args.bam,
@@ -53,6 +63,7 @@ def load_store(args: argparse.Namespace) -> vp.FragmentStore:
         exclude_chroms=args.exclude_chroms,
         dedup="flag" if args.dedup else False,
     )
+    store.metadata["ingest_settings"] = settings
     store.save(cache)
     return store
 

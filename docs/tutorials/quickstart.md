@@ -78,12 +78,13 @@ v.to_dataframe()             # tidy pos / length / value, e.g. for ggplot2 in R
 mat = store.to_matrix(anchors, flank=250, bin_size=10, feature="midpoint", len_range="tf")
 print(mat)
 prof = mat.normalize("cpm").mean_profile()
-print(prof.loc[prof["mean"].idxmax(), ["pos", "mean"]].to_dict())
+peak = prof.loc[prof["mean"].idxmax()]
+print(f"TF-fragment midpoints peak at {peak['pos']:+.0f} bp ({peak['mean']:.0f} CPM per anchor)")
 ```
 
 ```text
 SignalMatrix(shape=(50, 50), window=[-250, +250) bp, bin_size=10, feature='midpoint', lengths=20-120 bp, normalization='raw', assay='chec')
-{'pos': 5.0, 'mean': 1409.5238095238099}
+TF-fragment midpoints peak at +5 bp (1410 CPM per anchor)
 ```
 
 `cut_site_footprint` counts fragment ends at 1 bp, split into each fragment's upstream end (`plus`) and downstream end (`minus`) in anchor orientation. The simulated TF fragments contain the site, so their upstream ends fall before it and their downstream ends after it:

@@ -129,7 +129,7 @@ Everything starts as raw counts. CPM always divides by the **total fragments in 
 
 ### Differential V-plots: `v_a.diff(v_b)`
 
-This computes `a` relative to `b`: pass the treatment first and the reference as the argument. If both V-plots are raw, both are first CPM-normalised. The default `mode="log2fc"` adds half a raw count per cell, converted into each V-plot's own units, so the result does not depend on sequencing depth. Pass `pseudocount=` to set it yourself, in normalised units. `smooth_sigma=(rows, cols)` applies a Gaussian blur, in bins, before taking the ratio.
+This computes `a` relative to `b`: pass the treatment first and the reference as the argument. If both V-plots are raw, both are first CPM-normalised. The default `mode="log2fc"` adds half a raw count per cell, expressed in the normalised units and shared by both samples (the geometric mean of the two samples' values). The log2FC therefore does not depend on sequencing depth, and a cell empty in both samples is exactly 0. Pass `pseudocount=` to set it yourself, in normalised units. `smooth_sigma=(rows, cols)` applies a Gaussian blur, in bins, before taking the ratio.
 
 ### Matrices: `SignalMatrix.normalize(method)`
 

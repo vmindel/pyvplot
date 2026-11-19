@@ -78,8 +78,19 @@ def test_bam_to_vplot_script(tmp_path):
     assert list(scores.index) == list(anchors.index)
     assert np.isfinite(scores["protection_score"]).all()
 
-    # Second run reuses the cached store.
-    mod.main(["--bam", str(bam), "--motifs", str(bed), "--out", str(out)])
+    # Same settings reuse the cache; changed settings rebuild it.
+    def run_and_capture(extra: list[str]) -> str:
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            mod.main(["--bam", str(bam), "--motifs", str(bed), "--out", str(out), *extra])
+        return buf.getvalue()
+
+    assert "Loading cached store" in run_and_capture([])
+    assert "settings changed" in run_and_capture(["--min-mapq", "30"])
+    assert vp.FragmentStore.load(str(out) + ".frags.npz").metadata["ingest_settings"]["min_mapq"] == 30
 
 
 def test_your_data_page_embeds_the_script():

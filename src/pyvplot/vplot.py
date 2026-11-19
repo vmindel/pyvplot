@@ -321,12 +321,14 @@ class VPlot:
             Comparison metric: ``"log2fc"``, ``"subtract"``, ``"ratio"``, or ``"zscore"``.
         pseudocount:
             Added to numerator and denominator for ``"log2fc"`` and ``"ratio"``.
-            ``None`` (default) adds half a raw count per cell, converted into
-            each V-plot's own units (see [`raw_count_scale`][pyvplot.VPlot.raw_count_scale]), so the result
-            does not shrink towards 0 as sequencing depth grows. A number is
-            added as-is, in the V-plots' current units. For normalisations
-            without a known count scale (``expected``, ``density``, ...) the
-            default falls back to ``0.5`` in those units.
+            ``None`` (default) adds half a raw count per cell, in the V-plots'
+            normalised units (see [`raw_count_scale`][pyvplot.VPlot.raw_count_scale]):
+            one value shared by both, the geometric mean of the two samples'
+            half-count values. The result therefore does not shrink towards 0
+            as sequencing depth grows, and cells empty in both samples are 0.
+            A number is added as-is, in the V-plots' current units. For
+            normalisations without a known count scale (``expected``,
+            ``density``, ...) the default falls back to ``0.5`` in those units.
         smooth_sigma:
             Optional 2D Gaussian smoothing ``(sigma_len, sigma_pos)``.
         normalize_first:
@@ -353,19 +355,21 @@ class VPlot:
             b = b.smooth(smooth_sigma)
 
         if pseudocount is None:
+            # One shared value for both samples, so cells empty in both give exactly 0;
+            # the geometric mean keeps it at half a raw count in either sample's units
+            # up to the square root of their depth ratio.
             sa, sb = a.raw_count_scale(), b.raw_count_scale()
-            pc_a = 0.5 * sa if sa is not None else 0.5
-            pc_b = 0.5 * sb if sb is not None else 0.5
+            pc = 0.5 * float(np.sqrt(sa * sb)) if sa is not None and sb is not None else 0.5
         else:
-            pc_a = pc_b = float(pseudocount)
+            pc = float(pseudocount)
 
         m = mode.lower()
         if m == "log2fc":
-            vals = np.log2((a.counts + pc_a) / (b.counts + pc_b))
+            vals = np.log2((a.counts + pc) / (b.counts + pc))
         elif m == "subtract":
             vals = a.counts - b.counts
         elif m == "ratio":
-            vals = (a.counts + pc_a) / (b.counts + pc_b)
+            vals = (a.counts + pc) / (b.counts + pc)
         elif m == "zscore":
             delta = a.counts - b.counts
             sd = float(np.std(delta))
@@ -389,7 +393,7 @@ class VPlot:
             normalization=f"diff:{m}",
             is_diff=True,
             genome_len_counts=None,
-            metadata={"diff_mode": m, "pseudocount": (pc_a, pc_b)},
+            metadata={"diff_mode": m, "pseudocount": pc},
         )
 
     def marginal_position(
