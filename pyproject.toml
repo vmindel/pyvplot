@@ -1,0 +1,97 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyvplot"
+version = "0.1.0"
+description = "Fast, assay-aware Python toolkit for paired-end fragment geometry, V-plots, cleavage cut-site footprints, and nucleosome phasing."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "vmindel" },
+]
+keywords = [
+    "genomics",
+    "bioinformatics",
+    "v-plot",
+    "atac-seq",
+    "chec-seq",
+    "mnase-seq",
+    "cut-and-run",
+    "chip-exo",
+    "footprinting",
+    "nucleosome",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+numba = [
+    "numba>=0.58",
+]
+bam = [
+    "pysam>=0.22",
+]
+io = [
+    "pyarrow>=14.0",
+]
+plot = [
+    "matplotlib>=3.7",
+    "plotnine>=0.13",
+    "scipy>=1.11",
+]
+bigwig = [
+    "pyBigWig>=0.3.22",
+]
+all = [
+    "numba>=0.58",
+    "pysam>=0.22",
+    "pyarrow>=14.0",
+    "matplotlib>=3.7",
+    "plotnine>=0.13",
+    "scipy>=1.11",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+    "numba>=0.58",
+    "pysam>=0.22",
+    "pyarrow>=14.0",
+    "matplotlib>=3.7",
+    "plotnine>=0.13",
+    "scipy>=1.11",
+]
+
+[project.urls]
+Homepage = "https://github.com/vmindel/pyvplot"
+Repository = "https://github.com/vmindel/pyvplot"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pyvplot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
