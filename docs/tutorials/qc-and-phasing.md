@@ -1,8 +1,10 @@
-# Fragment QC & nucleosome phasing
+# Fragment QC and nucleosome phasing
 
-## Insert-size distribution, FRiP & `qc_summary`
+## Insert sizes, size classes and FRiP
 
-`qc_summary()` computes fragment-length statistics, assay size-band fractions (from `store.assay.size_bins`), and optional FRiP against peak intervals (automatically merging overlapping peaks to prevent double-counting).
+`qc_summary()` reports fragment count, length statistics, and the fraction of fragments in each of the assay's named size bins (inclusive bounds; bins may overlap or leave gaps). With `peaks=`, it also reports FRiP: the fraction of fragments whose midpoint falls in a peak, with overlapping peaks merged first. `store.frip(peaks, mode="overlap")` counts any overlap instead, and `return_per_peak=True` also returns per-peak counts.
+
+Look at `store.insert_size_distribution()` before trusting the preset bins: they are generic starting points.
 
 ```python
 import numpy as np
@@ -36,7 +38,9 @@ Plotting an ATAC-seq store with `plot_insert_size_matplotlib(..., show_bands=Tru
 
 ## Nucleosome phasogram & NRL estimation
 
-`phasogram()` computes exact pair-distance histograms in `[1, max_lag]` bp via a Numba sliding-window kernel and estimates the **Nucleosome Repeat Length (NRL)** via both harmonic peak-spacing regression (`nrl_peak_fit`, `r_squared`) and FFT periodogram (`nrl_fft`).
+`phasogram()` histograms the distances between all pairs of fragment midpoints on the same chromosome, up to `max_lag` bp. Regularly spaced nucleosome arrays give peaks at multiples of the repeat length. NRL is estimated two ways. `nrl_peak_fit` is the slope of peak position against peak number, with `r_squared` from that fit. `nrl_fft` comes from the dominant period in the spectrum. If they disagree by more than a few bp, or `r_squared` is low, there is little phasing to measure.
+
+Restrict to nucleosome-sized fragments, as a tuple or a size-bin name (`len_range="nucleosome"` for the MNase preset). The pair count grows with the square of local density, so on deep libraries use `chroms=` or `max_positions_per_chrom=` for a quick estimate.
 
 ```python
 rng = np.random.default_rng(2026)

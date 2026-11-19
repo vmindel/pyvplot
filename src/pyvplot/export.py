@@ -25,13 +25,13 @@ def to_binned_track(
 ) -> pd.DataFrame:
     """Compute a sorted genome-wide binned signal track as a DataFrame.
 
-    Returns a :class:`pandas.DataFrame` with columns ``chrom``, ``start``,
+    Returns a `pandas.DataFrame` with columns ``chrom``, ``start``,
     ``end``, ``value`` containing non-zero genomic bins.
 
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to bin.
+        [`FragmentStore`][pyvplot.FragmentStore] to bin.
     feature:
         ``"midpoint"``, ``"cuts"``, ``"cuts_plus"``, ``"cuts_minus"``, or
         ``"coverage"``. Defaults to ``store.assay.default_feature``.
@@ -285,7 +285,7 @@ def to_pymisha(
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to export.
+        [`FragmentStore`][pyvplot.FragmentStore] to export.
     track_name:
         Destination track name in the active ``pymisha`` database.
     mode:

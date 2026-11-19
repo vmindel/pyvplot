@@ -199,7 +199,7 @@ _ASSAY_ALIASES: dict[str, str] = {
 
 
 def get_assay(assay: str | AssayConfig) -> AssayConfig:
-    """Resolve an assay name (or alias) or pass through an :class:`AssayConfig`."""
+    """Resolve an assay name (or alias) or pass through an [`AssayConfig`][pyvplot.AssayConfig]."""
     if isinstance(assay, AssayConfig):
         return assay
     if not isinstance(assay, str):
@@ -247,7 +247,7 @@ def list_assays() -> list[str]:
 
 
 def register_assay(config: AssayConfig, overwrite: bool = False) -> None:
-    """Register a custom :class:`AssayConfig` preset globally."""
+    """Register a custom [`AssayConfig`][pyvplot.AssayConfig] preset globally."""
     key = config.name.strip().lower()
     if key in ASSAY_PRESETS and not overwrite:
         raise ValueError(

@@ -27,7 +27,7 @@ class SignalMatrix:
 
     Implements duck-typed mapping access (``mat["values"]``, ``mat["upstream"]``,
     etc.) and ``__array__`` so it can be passed directly into downstream tools
-    or converted via :meth:`to_enriched_heatmap`.
+    or converted via [`to_enriched_heatmap`][pyvplot.SignalMatrix.to_enriched_heatmap].
 
     Attributes
     ----------
@@ -47,7 +47,7 @@ class SignalMatrix:
     len_range:
         Optional inclusive ``(min_len, max_len)`` filter used during extraction.
     n_fragments:
-        Total fragments in source :class:`~pyvplot.store.FragmentStore`.
+        Total fragments in source [`FragmentStore`][pyvplot.FragmentStore].
     assay:
         Source assay name.
     normalization:
@@ -125,7 +125,7 @@ class SignalMatrix:
     ) -> Any:
         """Convert to ``EnrichedHeatmap``'s ``NormalizedMatrix`` if installed.
 
-        Falls back to :meth:`to_dict` when ``EnrichedHeatmap`` is not installed
+        Falls back to [`to_dict`][pyvplot.SignalMatrix.to_dict] when ``EnrichedHeatmap`` is not installed
         unless ``strict=True`` is specified.
         """
         nm_cls = None
@@ -215,7 +215,7 @@ class SignalMatrix:
         )
 
     def subset(self, indices: Any) -> SignalMatrix:
-        """Return a new :class:`SignalMatrix` restricted to selected anchor rows."""
+        """Return a new [`SignalMatrix`][pyvplot.SignalMatrix] restricted to selected anchor rows."""
         idx_arr = np.asarray(indices)
         return SignalMatrix(
             values=np.ascontiguousarray(self.values[idx_arr], dtype=np.float64),
@@ -297,12 +297,12 @@ def to_matrix(
     normalize: str | None = None,
     use_numba: bool | None = None,
 ) -> SignalMatrix:
-    """Compute a size-stratified ``(n_anchors, n_bins)`` :class:`SignalMatrix`.
+    """Compute a size-stratified ``(n_anchors, n_bins)`` [`SignalMatrix`][pyvplot.SignalMatrix].
 
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to query.
+        [`FragmentStore`][pyvplot.FragmentStore] to query.
     anchors:
         Anchor DataFrame, dict, list, or BED file path.
     flank:
@@ -377,11 +377,11 @@ class CutSiteFootprint:
     minus:
         Optional 1D aggregate ``-`` / antisense-strand cut-site signal.
     matrix_combined:
-        Optional per-anchor :class:`SignalMatrix` for combined cuts.
+        Optional per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] for combined cuts.
     matrix_plus:
-        Optional per-anchor :class:`SignalMatrix` for ``+`` cuts.
+        Optional per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] for ``+`` cuts.
     matrix_minus:
-        Optional per-anchor :class:`SignalMatrix` for ``-`` cuts.
+        Optional per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] for ``-`` cuts.
     n_anchors:
         Number of anchors aggregated.
     agg:
@@ -448,7 +448,7 @@ def cut_site_footprint(
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to query.
+        [`FragmentStore`][pyvplot.FragmentStore] to query.
     anchors:
         Anchor table (DataFrame, dict, or BED path).
     flank:
@@ -466,8 +466,8 @@ def cut_site_footprint(
     agg:
         Aggregation across anchors: ``"mean"`` (default) or ``"sum"``.
     keep_matrices:
-        Whether to retain the per-anchor :class:`SignalMatrix` objects on the
-        returned :class:`CutSiteFootprint`.
+        Whether to retain the per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] objects on the
+        returned [`CutSiteFootprint`][pyvplot.CutSiteFootprint].
     """
     if agg not in {"mean", "sum"}:
         raise ValueError(f"Invalid agg {agg!r}; expected 'mean' or 'sum'.")
@@ -585,7 +585,7 @@ def footprint_score(
     shoulders ``[-motif_half_width - flank_width, -motif_half_width)`` and
     ``[+motif_half_width, +motif_half_width + flank_width)``.
 
-    Returns a :class:`pandas.DataFrame` indexed by anchor ID with columns:
+    Returns a `pandas.DataFrame` indexed by anchor ID with columns:
     - ``center_cuts``: sum of signal in the motif center window
     - ``flank_cuts``: sum of signal in both flanking windows
     - ``center_density``: per-bp density in motif center

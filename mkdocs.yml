@@ -30,8 +30,10 @@ theme:
 nav:
   - Home: index.md
   - Installation: installation.md
+  - How pyvplot works: concepts.md
   - Tutorials:
       - Quick start: tutorials/quickstart.md
+      - Your own data: tutorials/your-data.md
       - V-plots & differential V-plots: tutorials/vplots-and-diff.md
       - Matrices & cut-site footprints: tutorials/matrices-and-footprints.md
       - Fragment QC & nucleosome phasing: tutorials/qc-and-phasing.md
@@ -47,6 +49,7 @@ nav:
       - Cleavage bias: api/bias.md
       - Track export: api/export.md
       - Plotting: api/plotting.md
+      - Simulated data: api/datasets.md
 
 plugins:
   - search

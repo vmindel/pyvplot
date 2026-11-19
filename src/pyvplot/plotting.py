@@ -74,7 +74,7 @@ def plot_vplot_matplotlib(
     center_line: bool = True,
     figsize: tuple[float, float] = (6.0, 4.5),
 ) -> tuple[Any, Any]:
-    """Render a :class:`~pyvplot.vplot.VPlot` (or differential V-plot) using ``matplotlib``.
+    """Render a [`VPlot`][pyvplot.VPlot] (or differential V-plot) using ``matplotlib``.
 
     Returns ``(fig, ax)``.
     """
@@ -129,7 +129,7 @@ def plot_vplot_plotnine(
     fill_label: str | None = None,
     center_line: bool = True,
 ) -> Any:
-    """Render a :class:`~pyvplot.vplot.VPlot` as a customizable ``plotnine`` ``ggplot`` object."""
+    """Render a [`VPlot`][pyvplot.VPlot] as a customizable ``plotnine`` ``ggplot`` object."""
     p9 = _require_plotnine()
     df = vp.to_dataframe()
     lo, hi = (
@@ -182,7 +182,7 @@ def plot_vplot_collection_plotnine(
     fill_label: str = "Signal",
     center_line: bool = True,
 ) -> Any:
-    """Render a :class:`~pyvplot.vplot.VPlotCollection` as a faceted ``plotnine`` plot."""
+    """Render a [`VPlotCollection`][pyvplot.VPlotCollection] as a faceted ``plotnine`` plot."""
     p9 = _require_plotnine()
     df = collection.to_dataframe()
     if len(df) == 0:

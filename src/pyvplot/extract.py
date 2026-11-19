@@ -122,7 +122,7 @@ def _read_anchors_bed(path: Path) -> pd.DataFrame:
 
 
 def normalize_anchors(anchors: Any) -> NormalizedAnchors:
-    """Convert anchors from a DataFrame, dict, list, or BED path to :class:`NormalizedAnchors`.
+    """Convert anchors from a DataFrame, dict, list, or BED path to [`NormalizedAnchors`][pyvplot.NormalizedAnchors].
 
     Accepted DataFrame columns:
     - Chromosome: ``chrom``, ``chr``, ``seqnames``, or ``chromosome``
@@ -1033,7 +1033,7 @@ def extract_events(
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to query.
+        [`FragmentStore`][pyvplot.FragmentStore] to query.
     anchors:
         Anchor table (DataFrame, dict, or BED path).
     flank:

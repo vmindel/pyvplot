@@ -27,7 +27,7 @@ score, per_peak_counts = vp.frip(frags, peaks_df, mode="overlap", return_per_pea
 ph = vp.phasogram(
     frags,
     max_lag=1000,
-    len_range=(135, 165),           # restrict to mononucleosomes if mixed assay
+    len_range=(135, 165),           # or a size-bin name, e.g. "nucleosome" (mnase)
     mode="midpoint",                # "midpoint" (dyad-to-dyad), "start", or "end"
     smooth_sigma=5.0,
     min_peak_lag=120,

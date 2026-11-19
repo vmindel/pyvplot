@@ -90,7 +90,7 @@ class FragmentStore:
     n_fragments:
         Total number of stored fragments across all chromosomes.
     assay:
-        :class:`~pyvplot.assays.AssayConfig` describing the assay geometry.
+        [`AssayConfig`][pyvplot.AssayConfig] describing the assay geometry.
     metadata:
         Arbitrary JSON-serializable metadata dictionary.
     """
@@ -205,7 +205,7 @@ class FragmentStore:
         exclude_chroms: Collection[str] | None = None,
         dedup: bool = False,
     ) -> FragmentStore:
-        """Return a filtered copy of this :class:`FragmentStore`.
+        """Return a filtered copy of this [`FragmentStore`][pyvplot.FragmentStore].
 
         Length bounds ``min_len`` and ``max_len`` are inclusive.
         """
@@ -286,7 +286,7 @@ class FragmentStore:
         dedup: bool = False,
         metadata: dict[str, Any] | None = None,
     ) -> FragmentStore:
-        """Construct a :class:`FragmentStore` from per-chromosome coordinate arrays."""
+        """Construct a [`FragmentStore`][pyvplot.FragmentStore] from per-chromosome coordinate arrays."""
         cfg = get_assay(assay)
         out_starts: dict[str, np.ndarray] = {}
         out_ends: dict[str, np.ndarray] = {}
@@ -351,7 +351,7 @@ class FragmentStore:
         dedup: bool = False,
         metadata: dict[str, Any] | None = None,
     ) -> FragmentStore:
-        """Construct a :class:`FragmentStore` from a pandas DataFrame."""
+        """Construct a [`FragmentStore`][pyvplot.FragmentStore] from a pandas DataFrame."""
         starts: dict[str, np.ndarray] = {}
         ends: dict[str, np.ndarray] = {}
         strands: dict[str, np.ndarray] | None = {} if strand_col is not None else None
@@ -404,7 +404,7 @@ class FragmentStore:
         bam_path:
             Path to BAM (or CRAM) file.
         assay:
-            Assay preset name or :class:`~pyvplot.assays.AssayConfig`.
+            Assay preset name or [`AssayConfig`][pyvplot.AssayConfig].
         min_mapq:
             Minimum mapping quality (MAPQ) threshold.
         exclude_flags:
@@ -611,7 +611,7 @@ class FragmentStore:
         path:
             Path to plain-text or gzipped BED / fragments TSV / BEDPE file.
         assay:
-            Assay preset name or :class:`~pyvplot.assays.AssayConfig`.
+            Assay preset name or [`AssayConfig`][pyvplot.AssayConfig].
         apply_shift:
             Whether to apply ``assay.left_shift`` / ``assay.right_shift``
             (default ``False`` since 10x/ArchR fragment files are typically
@@ -871,7 +871,7 @@ class FragmentStore:
 
     @classmethod
     def load(cls, path: str | Path, format: str | None = None) -> FragmentStore:
-        """Load a persisted :class:`FragmentStore` from ``.npz`` or ``.parquet``."""
+        """Load a persisted [`FragmentStore`][pyvplot.FragmentStore] from ``.npz`` or ``.parquet``."""
         in_path = Path(path)
         fmt = format.lower() if format is not None else None
         if fmt is None:
@@ -977,7 +977,7 @@ class FragmentStore:
         feature: str = "midpoint",
         use_numba: bool | None = None,
     ) -> VPlot:
-        """V-plot around ``anchors``. Same as :func:`pyvplot.vplot` with this store."""
+        """V-plot around ``anchors``. Same as [`pyvplot.vplot`][pyvplot.vplot] with this store."""
         from pyvplot.vplot import vplot
 
         return vplot(
@@ -998,7 +998,7 @@ class FragmentStore:
         normalize: str | None = None,
         use_numba: bool | None = None,
     ) -> SignalMatrix:
-        """Per-anchor binned signal. Same as :func:`pyvplot.to_matrix` with this store."""
+        """Per-anchor binned signal. Same as [`pyvplot.to_matrix`][pyvplot.to_matrix] with this store."""
         from pyvplot.matrices import to_matrix
 
         return to_matrix(
@@ -1021,7 +1021,7 @@ class FragmentStore:
         keep_matrices: bool = True,
         use_numba: bool | None = None,
     ) -> CutSiteFootprint:
-        """1-bp cut-site profile. Same as :func:`pyvplot.cut_site_footprint` with this store."""
+        """1-bp cut-site profile. Same as [`pyvplot.cut_site_footprint`][pyvplot.cut_site_footprint] with this store."""
         from pyvplot.matrices import cut_site_footprint
 
         return cut_site_footprint(
@@ -1041,7 +1041,7 @@ class FragmentStore:
         normalize: str | None = None,
         use_numba: bool | None = None,
     ) -> pd.DataFrame:
-        """Per-anchor protection scores. Same as :func:`pyvplot.footprint_score` with this store."""
+        """Per-anchor protection scores. Same as [`pyvplot.footprint_score`][pyvplot.footprint_score] with this store."""
         from pyvplot.matrices import footprint_score
 
         return footprint_score(
@@ -1059,7 +1059,7 @@ class FragmentStore:
         len_range: tuple[int, int] | str | None = None,
         overlap_mode: str = "midpoint",
     ) -> pd.DataFrame:
-        """Per-fragment table around anchors. Same as :func:`pyvplot.extract_events`."""
+        """Per-fragment table around anchors. Same as [`pyvplot.extract_events`][pyvplot.extract_events]."""
         from pyvplot.extract import extract_events
 
         return extract_events(
@@ -1073,7 +1073,7 @@ class FragmentStore:
         max_len: int | None = None,
         normalize: bool = True,
     ) -> pd.DataFrame:
-        """Fragment-length histogram. Same as :func:`pyvplot.insert_size_distribution`."""
+        """Fragment-length histogram. Same as [`pyvplot.insert_size_distribution`][pyvplot.insert_size_distribution]."""
         from pyvplot.qc import insert_size_distribution
 
         return insert_size_distribution(self, min_len=min_len, max_len=max_len, normalize=normalize)
@@ -1091,7 +1091,7 @@ class FragmentStore:
         expected_nrl_range: tuple[float, float] = (140.0, 240.0),
         use_numba: bool | None = None,
     ) -> PhasogramResult:
-        """Pair-distance histogram and NRL. Same as :func:`pyvplot.phasogram`."""
+        """Pair-distance histogram and NRL. Same as [`pyvplot.phasogram`][pyvplot.phasogram]."""
         from pyvplot.qc import phasogram
 
         return phasogram(
@@ -1107,20 +1107,20 @@ class FragmentStore:
         mode: str = "midpoint",
         return_per_peak: bool = False,
     ) -> float | tuple[float, np.ndarray]:
-        """Fraction of fragments in peaks. Same as :func:`pyvplot.frip`."""
+        """Fraction of fragments in peaks. Same as [`pyvplot.frip`][pyvplot.frip]."""
         from pyvplot.qc import frip
 
         return frip(self, peaks, mode=mode, return_per_peak=return_per_peak)
 
     def qc_summary(self, peaks: Any = None) -> dict[str, Any]:
-        """Length statistics, size-bin fractions and optional FRiP. Same as :func:`pyvplot.qc_summary`."""
+        """Length statistics, size-bin fractions and optional FRiP. Same as [`pyvplot.qc_summary`][pyvplot.qc_summary]."""
         from pyvplot.qc import qc_summary
 
         return qc_summary(self, peaks=peaks)
 
     @classmethod
     def merge(cls, stores: Iterable[FragmentStore], dedup: bool = False) -> FragmentStore:
-        """Merge multiple :class:`FragmentStore` instances into one."""
+        """Merge multiple [`FragmentStore`][pyvplot.FragmentStore] instances into one."""
         store_list = list(stores)
         if not store_list:
             raise ValueError("Cannot merge an empty collection of FragmentStores.")

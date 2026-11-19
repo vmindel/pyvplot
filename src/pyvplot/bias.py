@@ -165,7 +165,7 @@ class KmerBiasTable:
         cut_offset: int | None = None,
         normalize: bool = True,
     ) -> KmerBiasTable:
-        """Build a :class:`KmerBiasTable` from a mapping ``{kmer: propensity}``."""
+        """Build a [`KmerBiasTable`][pyvplot.KmerBiasTable] from a mapping ``{kmer: propensity}``."""
         if not kmer_scores:
             raise ValueError("kmer_scores dictionary cannot be empty.")
         first_kmer = next(iter(kmer_scores))
@@ -194,7 +194,7 @@ class KmerBiasTable:
         cut_offset: int | None = None,
         normalize: bool = True,
     ) -> KmerBiasTable:
-        """Load a k-mer bias table from a TSV/CSV file or :class:`pandas.DataFrame`."""
+        """Load a k-mer bias table from a TSV/CSV file or `pandas.DataFrame`."""
         if isinstance(table, (str, Path)):
             p = Path(table)
             sep = "," if p.suffix.lower() == ".csv" else "\t"
@@ -384,7 +384,7 @@ class KmerBiasTable:
         pseudocount: float = 1e-6,
         preserve_scale: bool = True,
     ) -> SignalMatrix:
-        """Bias-correct a 1-bp :class:`~pyvplot.matrices.SignalMatrix` using anchor sequences.
+        """Bias-correct a 1-bp [`SignalMatrix`][pyvplot.SignalMatrix] using anchor sequences.
 
         Parameters
         ----------
@@ -454,7 +454,7 @@ def normalize_by_control(
     Parameters
     ----------
     signal, control:
-        Matching :class:`~pyvplot.matrices.SignalMatrix`, :class:`~pyvplot.vplot.VPlot`,
+        Matching [`SignalMatrix`][pyvplot.SignalMatrix], [`VPlot`][pyvplot.VPlot],
         or NumPy arrays of identical shape.
     mode:
         ``"ratio"`` (``(signal + pc) / (control + pc)``), ``"log2fc"``

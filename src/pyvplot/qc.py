@@ -75,7 +75,7 @@ def insert_size_distribution(
 ) -> pd.DataFrame:
     """Compute per-base-pair fragment insert-size histogram.
 
-    Returns a :class:`pandas.DataFrame` with columns ``length``, ``count``,
+    Returns a `pandas.DataFrame` with columns ``length``, ``count``,
     and (when ``normalize=True``) ``fraction``.
     """
     lens = store.lengths()
@@ -159,7 +159,7 @@ def frip(
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to evaluate.
+        [`FragmentStore`][pyvplot.FragmentStore] to evaluate.
     peaks:
         Peak intervals (DataFrame with ``chrom``, ``start``, ``end`` or BED path).
     mode:
@@ -450,7 +450,7 @@ def phasogram(
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to analyze.
+        [`FragmentStore`][pyvplot.FragmentStore] to analyze.
     max_lag:
         Maximum pair distance in bp (default ``1000``).
     chroms:
@@ -538,7 +538,7 @@ def phasogram(
 
 
 def qc_summary(store: FragmentStore, peaks: Any = None) -> dict[str, Any]:
-    """Compute a summary QC dictionary for a :class:`~pyvplot.store.FragmentStore`."""
+    """Compute a summary QC dictionary for a [`FragmentStore`][pyvplot.FragmentStore]."""
     lens = store.lengths()
     summary: dict[str, Any] = {
         "assay": store.assay.name,

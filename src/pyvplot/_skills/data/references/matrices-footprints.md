@@ -22,8 +22,10 @@ mat_cut = frags.to_matrix(anchors, flank=100,  bin_size=1,  feature="cuts",     
 ## Handoff to `EnrichedHeatmap`
 
 ```python
-# Calls NormalizedMatrix.from_array(...) if EnrichedHeatmap is installed,
-# otherwise returns the duck-typed dict {"values", "region_index", "upstream", "downstream", "bin_size"}
+# Returns NormalizedMatrix.from_array(...) only if a module named enrichedheatmap /
+# EnrichedHeatmap / pyenrichedheatmap is importable; none exists on PyPI, so in
+# practice this is the dict {"values", "region_index", "upstream", "downstream", "bin_size"}.
+# Prefer mat.to_dict() or mat.to_dataframe() (long format, for R/ggplot2).
 eh_mat = mat_tf.normalize("cpm").to_enriched_heatmap(name="TF_midpoints")
 ```
 

@@ -70,7 +70,7 @@ class VPlot:
     n_anchors:
         Number of anchors aggregated into this V-plot.
     n_fragments:
-        Total number of fragments in the source :class:`~pyvplot.store.FragmentStore`
+        Total number of fragments in the source [`FragmentStore`][pyvplot.FragmentStore]
         (used for CPM normalization).
     assay:
         Name of the assay preset (e.g., ``"chec"``, ``"atac"``).
@@ -316,13 +316,13 @@ class VPlot:
         Parameters
         ----------
         other:
-            Reference :class:`VPlot` with identical position and length axes.
+            Reference [`VPlot`][pyvplot.VPlot] with identical position and length axes.
         mode:
             Comparison metric: ``"log2fc"``, ``"subtract"``, ``"ratio"``, or ``"zscore"``.
         pseudocount:
             Added to numerator and denominator for ``"log2fc"`` and ``"ratio"``.
             ``None`` (default) adds half a raw count per cell, converted into
-            each V-plot's own units (see :meth:`raw_count_scale`), so the result
+            each V-plot's own units (see [`raw_count_scale`][pyvplot.VPlot.raw_count_scale]), so the result
             does not shrink towards 0 as sequencing depth grows. A number is
             added as-is, in the V-plots' current units. For normalisations
             without a known count scale (``expected``, ``density``, ...) the
@@ -482,13 +482,13 @@ class VPlot:
 
 
 class VPlotCollection:
-    """Collection of labeled :class:`VPlot` objects for multi-condition faceting."""
+    """Collection of labeled [`VPlot`][pyvplot.VPlot] objects for multi-condition faceting."""
 
     def __init__(self, items: list[tuple[VPlot, dict[str, Any]]] | None = None) -> None:
         self._items: list[tuple[VPlot, dict[str, Any]]] = list(items) if items is not None else []
 
     def add(self, vp: VPlot, **metadata: Any) -> VPlotCollection:
-        """Add a :class:`VPlot` with condition/factor metadata (e.g., ``tf="CTCF", condition="WT"``)."""
+        """Add a [`VPlot`][pyvplot.VPlot] with condition/factor metadata (e.g., ``tf="CTCF", condition="WT"``)."""
         self._items.append((vp, dict(metadata)))
         return self
 
@@ -540,7 +540,7 @@ def vplot(
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to query.
+        [`FragmentStore`][pyvplot.FragmentStore] to query.
     anchors:
         Anchor table: DataFrame (``chrom`` + ``center``, or ``chrom`` + ``start``
         + ``end``; optional ``strand``), dict of columns, or a BED file path.
@@ -569,7 +569,7 @@ def vplot(
     -------
     VPlot
         Raw counts in ``.counts`` with shape ``(n_len, n_pos)``. Normalise with
-        :meth:`VPlot.normalize` before comparing samples.
+        [`VPlot.normalize`][pyvplot.VPlot.normalize] before comparing samples.
 
     Examples
     --------
