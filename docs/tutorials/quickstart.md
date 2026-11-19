@@ -96,7 +96,7 @@ print("plus peaks at", fp.pos[np.argmax(fp.plus)], "bp; minus peaks at", fp.pos[
 ```
 
 ```text
-CutSiteFootprint(pos=[-59.5, 59.5] bp, n_bins=120, n_anchors=50, split_strands=True, agg='mean', has_matrices=True)
+CutSiteFootprint(pos=[-59.5, 59.5] bp, n_bins=120, n_anchors=50, split_by='strand', agg='mean', has_matrices=True)
 plus peaks at -26.5 bp; minus peaks at 25.5 bp
 ```
 

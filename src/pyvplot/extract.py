@@ -40,6 +40,8 @@ FEATURE_CUTS = 1
 FEATURE_CUTS_PLUS = 2
 FEATURE_CUTS_MINUS = 3
 FEATURE_COVERAGE = 4
+FEATURE_CUTS_PROXIMAL = 5
+FEATURE_CUTS_DISTAL = 6
 
 _FEATURE_CODES: dict[str, int] = {
     "midpoint": FEATURE_MIDPOINT,
@@ -47,6 +49,9 @@ _FEATURE_CODES: dict[str, int] = {
     "cuts_plus": FEATURE_CUTS_PLUS,
     "cuts_minus": FEATURE_CUTS_MINUS,
     "coverage": FEATURE_COVERAGE,
+    # The end nearer to / farther from the anchor centre (unstranded stores only).
+    "cuts_proximal": FEATURE_CUTS_PROXIMAL,
+    "cuts_distal": FEATURE_CUTS_DISTAL,
     # ChIP-exo preset default. Stranded stores already hold one 5' end per read,
     # and the kernels read per-fragment strand, so this is the same as "cuts".
     "cuts_stranded": FEATURE_CUTS,
@@ -60,6 +65,69 @@ def feature_to_code(feature: str) -> int:
             f"Unsupported feature {feature!r}. Expected one of {sorted(_FEATURE_CODES)}."
         )
     return _FEATURE_CODES[feature]
+
+
+OVERLAP_OFF = 0
+OVERLAP_ANY = 1
+OVERLAP_FULL = 2
+OVERLAP_NONE = 3
+
+_OVERLAP_CODES: dict[str | None, int] = {
+    None: OVERLAP_OFF,
+    "any": OVERLAP_ANY,
+    "full": OVERLAP_FULL,
+    "none": OVERLAP_NONE,
+}
+
+
+def motif_overlap_to_code(motif_overlap: str | None) -> int:
+    """Convert a ``motif_overlap`` setting to its integer kernel code."""
+    if motif_overlap not in _OVERLAP_CODES:
+        raise ValueError(
+            f"Invalid motif_overlap {motif_overlap!r}; expected None, 'any', 'full' or 'none'."
+        )
+    return _OVERLAP_CODES[motif_overlap]
+
+
+def _check_stranded_support(store: FragmentStore, feature_code: int, overlap_code: int) -> None:
+    if store.strands is None:
+        return
+    if feature_code in (FEATURE_CUTS_PROXIMAL, FEATURE_CUTS_DISTAL):
+        raise ValueError(
+            "feature='cuts_proximal'/'cuts_distal' needs both ends of each fragment; this store is "
+            "stranded (one 5' end per read), so there is no near or far end. Use 'cuts_plus'/"
+            "'cuts_minus' to split by read strand."
+        )
+    if overlap_code != OVERLAP_OFF:
+        raise ValueError(
+            "motif_overlap needs fragment intervals; this store is stranded (one 5' end per read)."
+        )
+
+
+@njit(cache=True)
+def _overlap_ok(s: float, e: float, m_lo: float, m_hi: float, code: int) -> bool:
+    """Whether fragment ``[s, e)`` passes the motif-overlap filter for motif ``[m_lo, m_hi)``."""
+    if code == OVERLAP_ANY:
+        return s < m_hi and e > m_lo
+    if code == OVERLAP_FULL:
+        return s <= m_lo and e >= m_hi
+    if code == OVERLAP_NONE:
+        return not (s < m_hi and e > m_lo)
+    return True
+
+
+def _overlap_mask(
+    s: np.ndarray, e: np.ndarray, m_lo: float, m_hi: float, code: int
+) -> np.ndarray | None:
+    """Vectorised [`_overlap_ok`][]; ``None`` when no filter is applied."""
+    if code == OVERLAP_OFF:
+        return None
+    hit = (s < m_hi) & (e > m_lo)
+    if code == OVERLAP_ANY:
+        return hit
+    if code == OVERLAP_FULL:
+        return (s <= m_lo) & (e >= m_hi)
+    return ~hit
 
 
 @dataclass(frozen=True)
@@ -79,6 +147,11 @@ class NormalizedAnchors:
     chrom_groups:
         Mapping ``chrom -> int64 array of original anchor indices`` for
         efficient per-chromosome processing.
+    motif_starts, motif_ends:
+        Optional 1D ``float64`` arrays giving each anchor's genomic interval
+        ``[start, end)`` (from BED columns 2-3 or ``start``/``end`` columns).
+        Used only by the ``motif_overlap`` filter. When absent, each anchor is
+        the 1-bp interval ``[center - 0.5, center + 0.5)``.
     """
 
     chroms: np.ndarray
@@ -86,15 +159,24 @@ class NormalizedAnchors:
     strands: np.ndarray
     region_index: np.ndarray
     chrom_groups: dict[str, np.ndarray]
+    motif_starts: np.ndarray | None = None
+    motif_ends: np.ndarray | None = None
 
     @property
     def n_anchors(self) -> int:
         return int(len(self.centers))
 
+    def motif_intervals(self) -> tuple[np.ndarray, np.ndarray]:
+        """Per-anchor motif interval ``[start, end)`` in genomic coordinates."""
+        if self.motif_starts is not None and self.motif_ends is not None:
+            return self.motif_starts, self.motif_ends
+        # Centred 1-bp interval: mirror-symmetric, and equal to [start, start + 1) for 1-bp BED records.
+        return self.centers - 0.5, self.centers + 0.5
+
 
 def _read_anchors_bed(path: Path) -> pd.DataFrame:
     opener = gzip.open if path.suffix == ".gz" else open
-    records: list[tuple[str, float, str, str]] = []
+    records: list[tuple[str, int, int, float, str, str]] = []
     with opener(path, "rt", encoding="utf-8") as fh:
         for idx, line in enumerate(fh):
             if not line or line[0] == "#" or line.startswith(("track ", "browser ")):
@@ -114,8 +196,8 @@ def _read_anchors_bed(path: Path) -> pd.DataFrame:
                 strand = parts[5]
             elif len(parts) >= 4 and parts[3] in {"+", "-"}:
                 strand = parts[3]
-            records.append((chrom, center, strand, name))
-    df = pd.DataFrame(records, columns=["chrom", "center", "strand", "name"])
+            records.append((chrom, start, end, center, strand, name))
+    df = pd.DataFrame(records, columns=["chrom", "start", "end", "center", "strand", "name"])
     if len(df) > 0:
         df = df.set_index("name")
     return df
@@ -130,6 +212,10 @@ def normalize_anchors(anchors: Any) -> NormalizedAnchors:
       ``start`` and ``end`` (computes ``0.5 * (start + end)``)
     - Strand (optional): ``strand``, ``orientation``, or ``dir`` (``"-"`` or
       ``-1`` flips coordinates; defaults to ``"+"``)
+
+    When ``start`` and ``end`` are both present they are kept as the motif
+    interval for ``motif_overlap`` filtering, even if a ``center`` column sets
+    the window centre.
     """
     if isinstance(anchors, NormalizedAnchors):
         return anchors
@@ -170,11 +256,17 @@ def normalize_anchors(anchors: Any) -> NormalizedAnchors:
             center_col = col_map[cand]
             break
 
+    starts_a: np.ndarray | None = None
+    ends_a: np.ndarray | None = None
+    if "start" in col_map and "end" in col_map:
+        starts_a = np.ascontiguousarray(df[col_map["start"]].to_numpy(dtype=np.float64))
+        ends_a = np.ascontiguousarray(df[col_map["end"]].to_numpy(dtype=np.float64))
+        if np.any(ends_a < starts_a):
+            raise ValueError("Anchors have end < start; intervals must be [start, end).")
+
     if center_col is not None:
         centers = df[center_col].to_numpy(dtype=np.float64)
-    elif "start" in col_map and "end" in col_map:
-        starts_a = df[col_map["start"]].to_numpy(dtype=np.float64)
-        ends_a = df[col_map["end"]].to_numpy(dtype=np.float64)
+    elif starts_a is not None and ends_a is not None:
         centers = 0.5 * (starts_a + ends_a)
     else:
         raise ValueError(
@@ -210,6 +302,8 @@ def normalize_anchors(anchors: Any) -> NormalizedAnchors:
         strands=np.ascontiguousarray(strands, dtype=np.int8),
         region_index=region_index,
         chrom_groups=chrom_groups,
+        motif_starts=starts_a,
+        motif_ends=ends_a,
     )
 
 
@@ -296,6 +390,9 @@ def _vplot_range_kernel(
     len_bin: int,
     n_len: int,
     feature_code: int,
+    motif_lo: np.ndarray,
+    motif_hi: np.ndarray,
+    overlap_code: int,
     out_grid: np.ndarray,
 ) -> None:
     inv_pos_bin = 1.0 / pos_bin
@@ -322,6 +419,8 @@ def _vplot_range_kernel(
                 continue
             li = (fl - min_len) // len_bin
             if li < 0 or li >= n_len:
+                continue
+            if overlap_code != OVERLAP_OFF and not _overlap_ok(s, e, motif_lo[i], motif_hi[i], overlap_code):
                 continue
 
             if feature_code == FEATURE_MIDPOINT:
@@ -377,6 +476,19 @@ def _vplot_range_kernel(
                     if 0 <= pi < n_pos:
                         out_grid[li, pi] += 1.0
 
+            elif feature_code in (FEATURE_CUTS_PROXIMAL, FEATURE_CUTS_DISTAL):
+                r_l = (s - c) if a_st >= 0 else (c - e)
+                r_r = (e - c) if a_st >= 0 else (c - s)
+                # r_l + r_r >= 0 means the left end is at least as close; ties go to the left end.
+                left_near = r_l + r_r >= 0
+                if feature_code == FEATURE_CUTS_PROXIMAL:
+                    rel = r_l if left_near else r_r
+                else:
+                    rel = r_r if left_near else r_l
+                pi = int(math.floor((rel + upstream) * inv_pos_bin))
+                if 0 <= pi < n_pos:
+                    out_grid[li, pi] += 1.0
+
 
 @njit(parallel=True, cache=True)
 def _vplot_parallel_kernel(
@@ -397,6 +509,9 @@ def _vplot_parallel_kernel(
     len_bin: int,
     n_len: int,
     feature_code: int,
+    motif_lo: np.ndarray,
+    motif_hi: np.ndarray,
+    overlap_code: int,
 ) -> np.ndarray:
     n_anchors = centers.shape[0]
     chunk_grids = np.zeros((n_chunks, n_len, n_pos), dtype=np.float64)
@@ -426,6 +541,9 @@ def _vplot_parallel_kernel(
                 len_bin,
                 n_len,
                 feature_code,
+                motif_lo,
+                motif_hi,
+                overlap_code,
                 chunk_grids[ch],
             )
     out = np.zeros((n_len, n_pos), dtype=np.float64)
@@ -458,6 +576,9 @@ def _matrix_parallel_kernel(
     min_len: int,
     max_len: int,
     feature_code: int,
+    motif_lo: np.ndarray,
+    motif_hi: np.ndarray,
+    overlap_code: int,
     out_matrix: np.ndarray,
 ) -> None:
     inv_bin = 1.0 / bin_size
@@ -483,6 +604,8 @@ def _matrix_parallel_kernel(
             e = frag_ends[j]
             fl = e - s
             if fl < min_len or fl > max_len:
+                continue
+            if overlap_code != OVERLAP_OFF and not _overlap_ok(s, e, motif_lo[i], motif_hi[i], overlap_code):
                 continue
 
             if feature_code == FEATURE_MIDPOINT:
@@ -538,6 +661,18 @@ def _matrix_parallel_kernel(
                     if 0 <= bi < n_bins:
                         out_matrix[row, bi] += 1.0
 
+            elif feature_code in (FEATURE_CUTS_PROXIMAL, FEATURE_CUTS_DISTAL):
+                r_l = (s - c) if a_st >= 0 else (c - e)
+                r_r = (e - c) if a_st >= 0 else (c - s)
+                left_near = r_l + r_r >= 0
+                if feature_code == FEATURE_CUTS_PROXIMAL:
+                    rel = r_l if left_near else r_r
+                else:
+                    rel = r_r if left_near else r_l
+                bi = int(math.floor((rel + upstream) * inv_bin))
+                if 0 <= bi < n_bins:
+                    out_matrix[row, bi] += 1.0
+
             elif feature_code == FEATURE_COVERAGE:
                 if a_st >= 0:
                     r_start = s - c
@@ -568,6 +703,18 @@ def _matrix_parallel_kernel(
 # ----------------------------------------------------------------------
 
 
+def _proximal_distal_rel(
+    s: np.ndarray, e: np.ndarray, c: float, a_st: int, feature_code: int
+) -> np.ndarray:
+    """Anchor-oriented position of the near (or far) end of each fragment."""
+    r_l = (s - c) if a_st >= 0 else (c - e)
+    r_r = (e - c) if a_st >= 0 else (c - s)
+    left_near = (r_l + r_r) >= 0
+    if feature_code == FEATURE_CUTS_PROXIMAL:
+        return np.where(left_near, r_l, r_r)
+    return np.where(left_near, r_r, r_l)
+
+
 def _vplot_chrom_numpy(
     frag_starts: np.ndarray,
     frag_ends: np.ndarray,
@@ -584,6 +731,9 @@ def _vplot_chrom_numpy(
     len_bin: int,
     n_len: int,
     feature_code: int,
+    motif_lo: np.ndarray,
+    motif_hi: np.ndarray,
+    overlap_code: int,
     out_grid: np.ndarray,
 ) -> None:
     g_lo = np.where(anchor_strands >= 0, centers - upstream, centers - downstream)
@@ -603,6 +753,9 @@ def _vplot_chrom_numpy(
         e = frag_ends[lo:hi].astype(np.float64)
         fl = frag_ends[lo:hi] - frag_starts[lo:hi]
         valid_len = (fl >= min_len) & (fl < max_len)
+        ov = _overlap_mask(s, e, float(motif_lo[i]), float(motif_hi[i]), overlap_code)
+        if ov is not None:
+            valid_len &= ov
         if not np.any(valid_len):
             continue
         s = s[valid_len]
@@ -669,6 +822,13 @@ def _vplot_chrom_numpy(
                 if np.any(ok):
                     np.add.at(out_grid, (li[ok], pi[ok]), 1.0)
 
+        elif feature_code in (FEATURE_CUTS_PROXIMAL, FEATURE_CUTS_DISTAL):
+            rel = _proximal_distal_rel(s, e, c, a_st, feature_code)
+            pi = np.floor((rel + upstream) * inv_pos_bin).astype(np.int64)
+            ok = (pi >= 0) & (pi < n_pos)
+            if np.any(ok):
+                np.add.at(out_grid, (li[ok], pi[ok]), 1.0)
+
 
 def _matrix_chrom_numpy(
     frag_starts: np.ndarray,
@@ -685,6 +845,9 @@ def _matrix_chrom_numpy(
     min_len: int,
     max_len: int,
     feature_code: int,
+    motif_lo: np.ndarray,
+    motif_hi: np.ndarray,
+    overlap_code: int,
     out_matrix: np.ndarray,
 ) -> None:
     g_lo = np.where(anchor_strands >= 0, centers - upstream, centers - downstream)
@@ -702,6 +865,9 @@ def _matrix_chrom_numpy(
             continue
         fl = frag_ends[lo:hi] - frag_starts[lo:hi]
         valid_len = (fl >= min_len) & (fl <= max_len)
+        ov = _overlap_mask(frag_starts[lo:hi], frag_ends[lo:hi], float(motif_lo[i]), float(motif_hi[i]), overlap_code)
+        if ov is not None:
+            valid_len &= ov
         if not np.any(valid_len):
             continue
         s = frag_starts[lo:hi][valid_len].astype(np.float64)
@@ -768,6 +934,13 @@ def _matrix_chrom_numpy(
                 if np.any(ok):
                     np.add.at(out_matrix[row], bi[ok], 1.0)
 
+        elif feature_code in (FEATURE_CUTS_PROXIMAL, FEATURE_CUTS_DISTAL):
+            rel = _proximal_distal_rel(s, e, c, a_st, feature_code)
+            bi = np.floor((rel + upstream) * inv_bin).astype(np.int64)
+            ok = (bi >= 0) & (bi < n_bins)
+            if np.any(ok):
+                np.add.at(out_matrix[row], bi[ok], 1.0)
+
         elif feature_code == FEATURE_COVERAGE:
             r_start = (s - c) if a_st >= 0 else (c - e)
             r_end = (e - c) if a_st >= 0 else (c - s)
@@ -809,11 +982,14 @@ def accumulate_vplot(
     len_bin: int = 1,
     feature: str = "midpoint",
     use_numba: bool | None = None,
+    motif_overlap: str | None = None,
 ) -> tuple[np.ndarray, NormalizedAnchors]:
     """Stream fragments around ``anchors`` directly into a 2D ``(n_len, n_pos)`` grid.
 
     Length bins are half-open ``[min_len, max_len)`` with uniform width ``len_bin``.
     Position bins are half-open ``[-upstream, downstream)`` with uniform width ``pos_bin``.
+    ``motif_overlap`` keeps only fragments that overlap (``"any"``), contain
+    (``"full"``) or miss (``"none"``) each anchor's motif interval.
     """
     if pos_bin <= 0 or len_bin <= 0:
         raise ValueError("`pos_bin` and `len_bin` must be positive integers.")
@@ -831,6 +1007,8 @@ def accumulate_vplot(
     fcode = feature_to_code(feature)
     if fcode == FEATURE_COVERAGE:
         raise ValueError("V-plot accumulation does not support feature='coverage'; use 'midpoint' or 'cuts'.")
+    ocode = motif_overlap_to_code(motif_overlap)
+    _check_stranded_support(store, fcode, ocode)
 
     norm = normalize_anchors(anchors)
     n_pos = total_span // pos_bin
@@ -843,6 +1021,7 @@ def accumulate_vplot(
 
     run_numba = HAS_NUMBA if use_numba is None else bool(use_numba and HAS_NUMBA)
     empty_strands = np.empty(0, dtype=np.int8)
+    m_lo_all, m_hi_all = norm.motif_intervals()
 
     for chrom, idxs in norm.chrom_groups.items():
         if chrom not in store.starts or len(store.starts[chrom]) == 0:
@@ -855,6 +1034,8 @@ def accumulate_vplot(
 
         c_centers = np.ascontiguousarray(norm.centers[idxs], dtype=np.float64)
         c_strands = np.ascontiguousarray(norm.strands[idxs], dtype=np.int8)
+        c_mlo = np.ascontiguousarray(m_lo_all[idxs], dtype=np.float64)
+        c_mhi = np.ascontiguousarray(m_hi_all[idxs], dtype=np.float64)
 
         if run_numba:
             n_local = len(c_centers)
@@ -878,6 +1059,9 @@ def accumulate_vplot(
                     int(len_bin),
                     n_len,
                     fcode,
+                    c_mlo,
+                    c_mhi,
+                    ocode,
                 )
             else:
                 _vplot_range_kernel(
@@ -899,6 +1083,9 @@ def accumulate_vplot(
                     int(len_bin),
                     n_len,
                     fcode,
+                    c_mlo,
+                    c_mhi,
+                    ocode,
                     grid,
                 )
         else:
@@ -918,6 +1105,9 @@ def accumulate_vplot(
                 int(len_bin),
                 n_len,
                 fcode,
+                c_mlo,
+                c_mhi,
+                ocode,
                 grid,
             )
 
@@ -933,10 +1123,12 @@ def accumulate_matrix(
     feature: str = "midpoint",
     len_range: tuple[int, int] | None = None,
     use_numba: bool | None = None,
+    motif_overlap: str | None = None,
 ) -> tuple[np.ndarray, NormalizedAnchors]:
     """Extract a ``(n_anchors, n_bins)`` signal matrix around ``anchors``.
 
     ``len_range = (min_len, max_len)`` uses inclusive bounds ``min_len <= length <= max_len``.
+    ``motif_overlap`` filters fragments as in [`accumulate_vplot`][pyvplot.extract.accumulate_vplot].
     """
     if bin_size <= 0:
         raise ValueError("`bin_size` must be a positive integer.")
@@ -947,6 +1139,8 @@ def accumulate_matrix(
         )
 
     fcode = feature_to_code(feature)
+    ocode = motif_overlap_to_code(motif_overlap)
+    _check_stranded_support(store, fcode, ocode)
     norm = normalize_anchors(anchors)
     n_bins = total_span // bin_size
     out = np.zeros((norm.n_anchors, n_bins), dtype=np.float64)
@@ -965,6 +1159,7 @@ def accumulate_matrix(
 
     run_numba = HAS_NUMBA if use_numba is None else bool(use_numba and HAS_NUMBA)
     empty_strands = np.empty(0, dtype=np.int8)
+    m_lo_all, m_hi_all = norm.motif_intervals()
 
     for chrom, idxs in norm.chrom_groups.items():
         if chrom not in store.starts or len(store.starts[chrom]) == 0:
@@ -977,6 +1172,8 @@ def accumulate_matrix(
 
         c_centers = np.ascontiguousarray(norm.centers[idxs], dtype=np.float64)
         c_strands = np.ascontiguousarray(norm.strands[idxs], dtype=np.int8)
+        c_mlo = np.ascontiguousarray(m_lo_all[idxs], dtype=np.float64)
+        c_mhi = np.ascontiguousarray(m_hi_all[idxs], dtype=np.float64)
 
         if run_numba:
             _matrix_parallel_kernel(
@@ -995,6 +1192,9 @@ def accumulate_matrix(
                 min_len,
                 max_len,
                 fcode,
+                c_mlo,
+                c_mhi,
+                ocode,
                 out,
             )
         else:
@@ -1013,6 +1213,9 @@ def accumulate_matrix(
                 min_len,
                 max_len,
                 fcode,
+                c_mlo,
+                c_mhi,
+                ocode,
                 out,
             )
 
@@ -1027,6 +1230,7 @@ def extract_events(
     downstream: int | None = None,
     len_range: tuple[int, int] | str | None = None,
     overlap_mode: str = "midpoint",
+    motif_overlap: str | None = None,
 ) -> pd.DataFrame:
     """Extract a compact per-fragment event table around ``anchors``.
 
@@ -1048,12 +1252,23 @@ def extract_events(
         - ``"midpoint"``: fragments whose midpoint falls in ``[-upstream, downstream)``
         - ``"any"``: fragments overlapping ``[-upstream, downstream)`` at any base
         - ``"cuts"``: fragments with at least one cut site in ``[-upstream, downstream)``
+    motif_overlap:
+        Optional filter on each fragment against the anchor's motif interval
+        (BED start/end, or ``[center - 0.5, center + 0.5)`` for point anchors),
+        applied on top of ``overlap_mode``:
+        - ``None`` (default): no filter
+        - ``"any"``: fragment overlaps the motif by at least 1 bp
+        - ``"full"``: fragment contains the whole motif
+        - ``"none"``: fragment does not overlap the motif
 
     Returns
     -------
     pandas.DataFrame
         Columns: ``anchor_idx``, ``rel_mid``, ``rel_left``, ``rel_right``,
-        ``frag_len`` (and ``frag_strand`` if ``store.is_stranded``).
+        ``frag_len``. Unstranded stores add ``rel_proximal`` / ``rel_distal``
+        (the end nearer to / farther from the anchor centre; ties go to
+        ``rel_left``) and ``motif_overlap`` (``"full"``, ``"partial"`` or
+        ``"none"``). Stranded stores add ``frag_strand`` instead.
     """
     up = float(flank if upstream is None else upstream)
     dn = float(flank if downstream is None else downstream)
@@ -1062,14 +1277,15 @@ def extract_events(
             f"Invalid overlap_mode {overlap_mode!r}; expected 'midpoint', 'any', or 'cuts'."
         )
 
+    ocode = motif_overlap_to_code(motif_overlap)
+    _check_stranded_support(store, FEATURE_CUTS, ocode)
+
     resolved_len = resolve_len_range(store.assay, len_range)
     norm = normalize_anchors(anchors)
     if norm.n_anchors == 0 or store.n_fragments == 0:
-        cols = ["anchor_idx", "rel_mid", "rel_left", "rel_right", "frag_len"]
-        if store.is_stranded:
-            cols.append("frag_strand")
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame(columns=_event_columns(store.is_stranded))
     _warn_missing_chroms(store, norm)
+    m_lo_all, m_hi_all = norm.motif_intervals()
 
     min_len = 0 if resolved_len is None else resolved_len[0]
     max_len = 2_147_483_647 if resolved_len is None else resolved_len[1]
@@ -1080,6 +1296,7 @@ def extract_events(
     rel_right_list: list[np.ndarray] = []
     flen_list: list[np.ndarray] = []
     fstrand_list: list[np.ndarray] = []
+    mov_list: list[np.ndarray] = []
 
     for chrom, idxs in norm.chrom_groups.items():
         if chrom not in store.starts or len(store.starts[chrom]) == 0:
@@ -1132,6 +1349,9 @@ def extract_events(
                 else:
                     keep = ((r_left >= -up) & (r_left < dn)) | ((r_right >= -up) & (r_right < dn))
 
+            ov = _overlap_mask(s_v, e_v, float(m_lo_all[idxs[i]]), float(m_hi_all[idxs[i]]), ocode)
+            if ov is not None:
+                keep &= ov
             if not np.any(keep):
                 continue
             n_keep = int(np.sum(keep))
@@ -1143,12 +1363,19 @@ def extract_events(
             if f_strands is not None:
                 eff_st = (f_strands[lo:hi][valid][keep] * a_st).astype(np.int8)
                 fstrand_list.append(eff_st)
+            else:
+                m_lo = float(m_lo_all[idxs[i]])
+                m_hi = float(m_hi_all[idxs[i]])
+                sk, ek = s_v[keep], e_v[keep]
+                mov = np.where(
+                    (sk <= m_lo) & (ek >= m_hi),
+                    "full",
+                    np.where((sk < m_hi) & (ek > m_lo), "partial", "none"),
+                )
+                mov_list.append(mov)
 
     if not a_idxs_list:
-        cols = ["anchor_idx", "rel_mid", "rel_left", "rel_right", "frag_len"]
-        if store.is_stranded:
-            cols.append("frag_strand")
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame(columns=_event_columns(store.is_stranded))
 
     data: dict[str, Any] = {
         "anchor_idx": np.concatenate(a_idxs_list),
@@ -1159,4 +1386,19 @@ def extract_events(
     }
     if store.is_stranded:
         data["frag_strand"] = np.concatenate(fstrand_list)
+    else:
+        rl, rr = data["rel_left"], data["rel_right"]
+        left_near = (rl + rr) >= 0
+        data["rel_proximal"] = np.where(left_near, rl, rr)
+        data["rel_distal"] = np.where(left_near, rr, rl)
+        data["motif_overlap"] = pd.Categorical(
+            np.concatenate(mov_list), categories=["full", "partial", "none"]
+        )
     return pd.DataFrame(data)
+
+
+def _event_columns(is_stranded: bool) -> list[str]:
+    cols = ["anchor_idx", "rel_mid", "rel_left", "rel_right", "frag_len"]
+    if is_stranded:
+        return [*cols, "frag_strand"]
+    return [*cols, "rel_proximal", "rel_distal", "motif_overlap"]

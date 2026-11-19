@@ -44,7 +44,7 @@ class SignalMatrix:
         Width of each genomic bin (bp).
     feature:
         Feature extracted (``"midpoint"``, ``"cuts"``, ``"cuts_plus"``,
-        ``"cuts_minus"``, or ``"coverage"``).
+        ``"cuts_minus"``, ``"cuts_proximal"``, ``"cuts_distal"`` or ``"coverage"``).
     len_range:
         Optional inclusive ``(min_len, max_len)`` filter used during extraction.
     n_fragments:
@@ -55,6 +55,9 @@ class SignalMatrix:
         Normalization applied (``"raw"``, ``"cpm"``, ``"rpkm"``, etc.).
     metadata:
         Arbitrary metadata dictionary.
+    motif_overlap:
+        Motif-overlap filter used at extraction (``None``, ``"any"``,
+        ``"full"`` or ``"none"``).
     """
 
     values: np.ndarray
@@ -68,12 +71,14 @@ class SignalMatrix:
     assay: str = "generic"
     normalization: str = "raw"
     metadata: dict[str, Any] = field(default_factory=dict)
+    motif_overlap: str | None = None
 
     def __repr__(self) -> str:
         lr = "all" if self.len_range is None else f"{self.len_range[0]}-{self.len_range[1]} bp"
+        ov = "" if self.motif_overlap is None else f"motif_overlap={self.motif_overlap!r}, "
         return (
             f"SignalMatrix(shape={self.shape}, window=[-{self.upstream}, +{self.downstream}) bp, "
-            f"bin_size={self.bin_size}, feature={self.feature!r}, lengths={lr}, "
+            f"bin_size={self.bin_size}, feature={self.feature!r}, lengths={lr}, {ov}"
             f"normalization={self.normalization!r}, assay={self.assay!r})"
         )
 
@@ -192,6 +197,7 @@ class SignalMatrix:
             assay=self.assay,
             normalization=m,
             metadata=dict(self.metadata),
+            motif_overlap=self.motif_overlap,
         )
 
     def subset(self, indices: Any) -> SignalMatrix:
@@ -209,6 +215,7 @@ class SignalMatrix:
             assay=self.assay,
             normalization=self.normalization,
             metadata=dict(self.metadata),
+            motif_overlap=self.motif_overlap,
         )
 
     def mean_profile(self, ci: float | None = None) -> pd.DataFrame:
@@ -275,6 +282,7 @@ def to_matrix(
     feature: str | None = None,
     len_range: tuple[int, int] | str | None = None,
     normalize: str | None = None,
+    motif_overlap: str | None = None,
     use_numba: bool | None = None,
 ) -> SignalMatrix:
     """Compute a size-stratified ``(n_anchors, n_bins)`` [`SignalMatrix`][pyvplot.SignalMatrix].
@@ -293,14 +301,19 @@ def to_matrix(
         Bin width (bp). ``upstream + downstream`` must be divisible by ``bin_size``.
     feature:
         Feature to extract: ``"midpoint"``, ``"cuts"``, ``"cuts_plus"``,
-        ``"cuts_minus"``, or ``"coverage"``. Defaults to the store's
-        ``assay.default_feature`` (mapping ``"cuts_stranded"`` to ``"cuts"``).
+        ``"cuts_minus"``, ``"cuts_proximal"`` (end nearer the anchor centre),
+        ``"cuts_distal"`` (farther end) or ``"coverage"``. Defaults to the
+        store's ``assay.default_feature`` (mapping ``"cuts_stranded"`` to ``"cuts"``).
     len_range:
         Optional inclusive ``(min_len, max_len)`` fragment-length filter, or the
         name of a preset size bin in ``store.assay.size_bins`` (e.g., ``"tf"``,
         ``"nfr"``, ``"mononucleosome"``).
     normalize:
         Optional normalization applied immediately (e.g., ``"cpm"``, ``"rpkm"``).
+    motif_overlap:
+        Keep only fragments overlapping each anchor's motif interval
+        (``"any"``), containing it (``"full"``), or missing it (``"none"``).
+        See [`vplot`][pyvplot.vplot] for how the interval is defined.
     use_numba:
         Override automatic Numba dispatch.
     """
@@ -323,6 +336,7 @@ def to_matrix(
         feature=feat,
         len_range=resolved_len,
         use_numba=use_numba,
+        motif_overlap=motif_overlap,
     )
 
     mat = SignalMatrix(
@@ -336,6 +350,7 @@ def to_matrix(
         n_fragments=store.n_fragments,
         assay=store.assay.name,
         normalization="raw",
+        motif_overlap=motif_overlap,
     )
     if normalize is not None:
         mat = mat.normalize(normalize)
@@ -351,11 +366,11 @@ class CutSiteFootprint:
     pos:
         1D array of bin centers (bp relative to anchor center).
     combined:
-        1D aggregate cut-site signal (both strands combined).
+        1D aggregate cut-site signal (both ends combined).
     plus:
-        Optional 1D aggregate ``+`` / sense-strand cut-site signal.
+        Optional 1D aggregate left-end (``cuts_plus``) signal; set when ``split_by="strand"``.
     minus:
-        Optional 1D aggregate ``-`` / antisense-strand cut-site signal.
+        Optional 1D aggregate right-end (``cuts_minus``) signal; set when ``split_by="strand"``.
     matrix_combined:
         Optional per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] for combined cuts.
     matrix_plus:
@@ -366,6 +381,16 @@ class CutSiteFootprint:
         Number of anchors aggregated.
     agg:
         Aggregation mode (``"mean"`` or ``"sum"``).
+    proximal, distal:
+        Optional 1D aggregate signal of the end nearer to / farther from the
+        anchor centre; set when ``split_by="proximity"``.
+    matrix_proximal, matrix_distal:
+        Optional per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] objects for
+        the proximal and distal ends.
+    split_by:
+        ``"strand"``, ``"proximity"``, or ``None`` (combined only).
+    motif_overlap:
+        Motif-overlap filter used at extraction.
     """
 
     pos: np.ndarray
@@ -377,17 +402,37 @@ class CutSiteFootprint:
     matrix_minus: SignalMatrix | None = None
     n_anchors: int = 0
     agg: str = "mean"
+    proximal: np.ndarray | None = None
+    distal: np.ndarray | None = None
+    matrix_proximal: SignalMatrix | None = None
+    matrix_distal: SignalMatrix | None = None
+    split_by: str | None = None
+    motif_overlap: str | None = None
 
     def __repr__(self) -> str:
         span = f"[{self.pos[0]:g}, {self.pos[-1]:g}]" if len(self.pos) else "[]"
+        ov = "" if self.motif_overlap is None else f"motif_overlap={self.motif_overlap!r}, "
         return (
             f"CutSiteFootprint(pos={span} bp, n_bins={len(self.pos)}, n_anchors={self.n_anchors}, "
-            f"split_strands={self.plus is not None}, agg={self.agg!r}, "
+            f"split_by={self.split_by!r}, {ov}agg={self.agg!r}, "
             f"has_matrices={self.matrix_combined is not None})"
         )
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Export cut-site footprint to a tidy DataFrame (``pos``, ``strand``, ``signal``)."""
+        """Export to a tidy DataFrame.
+
+        Columns are ``pos``, ``signal`` and the split label: ``strand``
+        (``"+"``/``"-"``, or ``"both"`` when unsplit) for a strand split, or
+        ``end`` (``"proximal"``/``"distal"``) for a proximity split.
+        """
+        if self.proximal is not None and self.distal is not None:
+            return pd.concat(
+                [
+                    pd.DataFrame({"pos": self.pos, "end": "proximal", "signal": self.proximal}),
+                    pd.DataFrame({"pos": self.pos, "end": "distal", "signal": self.distal}),
+                ],
+                ignore_index=True,
+            )
         frames: list[pd.DataFrame] = []
         if self.plus is not None and self.minus is not None:
             frames.append(pd.DataFrame({"pos": self.pos, "strand": "+", "signal": self.plus}))
@@ -421,9 +466,11 @@ def cut_site_footprint(
     normalize: str | None = None,
     agg: str = "mean",
     keep_matrices: bool = True,
+    split_by: str = "strand",
+    motif_overlap: str | None = None,
     use_numba: bool | None = None,
 ) -> CutSiteFootprint:
-    """Compute 1-bp cleavage cut-site profiles (strand-separated or combined).
+    """Compute 1-bp cleavage cut-site profiles, split by fragment end or combined.
 
     Parameters
     ----------
@@ -438,8 +485,9 @@ def cut_site_footprint(
     len_range:
         Optional fragment-length filter or named assay size bin.
     split_strands:
-        If ``True`` (default), extract ``cuts_plus`` and ``cuts_minus``
-        separately as well as their sum.
+        If ``True`` (default), extract the two ends separately as well as
+        their sum, as chosen by ``split_by``. ``False`` gives the combined
+        profile only.
     normalize:
         Optional normalization (e.g., ``"cpm"``) applied to each matrix prior
         to aggregation.
@@ -448,102 +496,92 @@ def cut_site_footprint(
     keep_matrices:
         Whether to retain the per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] objects on the
         returned [`CutSiteFootprint`][pyvplot.CutSiteFootprint].
+    split_by:
+        How the ends are split when ``split_strands=True``: ``"strand"``
+        (default; left/right end in anchor orientation, i.e. ``cuts_plus`` /
+        ``cuts_minus``, filling ``plus``/``minus``) or ``"proximity"`` (end
+        nearer to / farther from the anchor centre, filling
+        ``proximal``/``distal``; unstranded stores only).
+    motif_overlap:
+        Keep only fragments overlapping each anchor's motif interval
+        (``"any"``), containing it (``"full"``), or missing it (``"none"``).
+        See [`vplot`][pyvplot.vplot].
     """
     if agg not in {"mean", "sum"}:
         raise ValueError(f"Invalid agg {agg!r}; expected 'mean' or 'sum'.")
+    if split_by not in {"strand", "proximity"}:
+        raise ValueError(f"Invalid split_by {split_by!r}; expected 'strand' or 'proximity'.")
 
     reducer = np.mean if agg == "mean" else np.sum
 
+    def _mat(feat: str) -> SignalMatrix:
+        return to_matrix(
+            store,
+            anchors,
+            flank=flank,
+            upstream=upstream,
+            downstream=downstream,
+            bin_size=bin_size,
+            feature=feat,
+            len_range=len_range,
+            normalize=normalize,
+            motif_overlap=motif_overlap,
+            use_numba=use_numba,
+        )
+
+    def _profile(m: SignalMatrix) -> np.ndarray:
+        if m.n_anchors == 0:
+            return np.zeros(m.n_bins, dtype=np.float64)
+        return np.asarray(reducer(m.values, axis=0), dtype=np.float64)
+
     if split_strands:
-        m_plus = to_matrix(
-            store,
-            anchors,
-            flank=flank,
-            upstream=upstream,
-            downstream=downstream,
-            bin_size=bin_size,
-            feature="cuts_plus",
-            len_range=len_range,
-            normalize=normalize,
-            use_numba=use_numba,
-        )
-        m_minus = to_matrix(
-            store,
-            anchors,
-            flank=flank,
-            upstream=upstream,
-            downstream=downstream,
-            bin_size=bin_size,
-            feature="cuts_minus",
-            len_range=len_range,
-            normalize=normalize,
-            use_numba=use_numba,
-        )
+        feats = ("cuts_plus", "cuts_minus") if split_by == "strand" else ("cuts_proximal", "cuts_distal")
+        m_a, m_b = _mat(feats[0]), _mat(feats[1])
         m_comb = SignalMatrix(
-            values=m_plus.values + m_minus.values,
-            region_index=m_plus.region_index.copy(),
-            upstream=m_plus.upstream,
-            downstream=m_plus.downstream,
-            bin_size=m_plus.bin_size,
+            values=m_a.values + m_b.values,
+            region_index=m_a.region_index.copy(),
+            upstream=m_a.upstream,
+            downstream=m_a.downstream,
+            bin_size=m_a.bin_size,
             feature="cuts",
-            len_range=m_plus.len_range,
-            n_fragments=m_plus.n_fragments,
-            assay=m_plus.assay,
-            normalization=m_plus.normalization,
+            len_range=m_a.len_range,
+            n_fragments=m_a.n_fragments,
+            assay=m_a.assay,
+            normalization=m_a.normalization,
+            motif_overlap=motif_overlap,
         )
-        pos = m_plus.bin_centers
-        n_a = m_plus.n_anchors
-        if n_a == 0:
-            z = np.zeros(m_plus.n_bins, dtype=np.float64)
-            p_prof = z.copy()
-            m_prof = z.copy()
-            c_prof = z.copy()
-        else:
-            p_prof = np.asarray(reducer(m_plus.values, axis=0), dtype=np.float64)
-            m_prof = np.asarray(reducer(m_minus.values, axis=0), dtype=np.float64)
-            c_prof = p_prof + m_prof
-
+        p_a, p_b = _profile(m_a), _profile(m_b)
+        keep = keep_matrices
+        common: dict[str, Any] = {
+            "pos": m_a.bin_centers,
+            "combined": p_a + p_b,
+            "matrix_combined": m_comb if keep else None,
+            "n_anchors": m_a.n_anchors,
+            "agg": agg,
+            "split_by": split_by,
+            "motif_overlap": motif_overlap,
+        }
+        if split_by == "strand":
+            return CutSiteFootprint(
+                plus=p_a, minus=p_b,
+                matrix_plus=m_a if keep else None, matrix_minus=m_b if keep else None,
+                **common,
+            )
         return CutSiteFootprint(
-            pos=pos,
-            combined=c_prof,
-            plus=p_prof,
-            minus=m_prof,
-            matrix_combined=m_comb if keep_matrices else None,
-            matrix_plus=m_plus if keep_matrices else None,
-            matrix_minus=m_minus if keep_matrices else None,
-            n_anchors=n_a,
-            agg=agg,
+            proximal=p_a, distal=p_b,
+            matrix_proximal=m_a if keep else None, matrix_distal=m_b if keep else None,
+            **common,
         )
 
-    m_comb = to_matrix(
-        store,
-        anchors,
-        flank=flank,
-        upstream=upstream,
-        downstream=downstream,
-        bin_size=bin_size,
-        feature="cuts",
-        len_range=len_range,
-        normalize=normalize,
-        use_numba=use_numba,
-    )
-    pos = m_comb.bin_centers
-    n_a = m_comb.n_anchors
-    c_prof = (
-        np.zeros(m_comb.n_bins, dtype=np.float64)
-        if n_a == 0
-        else np.asarray(reducer(m_comb.values, axis=0), dtype=np.float64)
-    )
+    m_comb = _mat("cuts")
     return CutSiteFootprint(
-        pos=pos,
-        combined=c_prof,
-        plus=None,
-        minus=None,
+        pos=m_comb.bin_centers,
+        combined=_profile(m_comb),
         matrix_combined=m_comb if keep_matrices else None,
-        matrix_plus=None,
-        matrix_minus=None,
-        n_anchors=n_a,
+        n_anchors=m_comb.n_anchors,
         agg=agg,
+        split_by=None,
+        motif_overlap=motif_overlap,
     )
 
 

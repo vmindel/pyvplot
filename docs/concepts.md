@@ -85,6 +85,8 @@ Row order and labels are kept: `SignalMatrix.region_index` and the `footprint_sc
 | `cuts` | both ends, `start` and `end` | 2 | Cleavage footprints (ChEC, MNase, ATAC) |
 | `cuts_plus` | the upstream end, in anchor orientation | 1 | Strand-split footprints |
 | `cuts_minus` | the downstream end, in anchor orientation | 1 | Strand-split footprints |
+| `cuts_proximal` | the end nearer the anchor centre | 1 | Near/far-split footprints; unstranded stores only |
+| `cuts_distal` | the end farther from the anchor centre | 1 | Near/far-split footprints; unstranded stores only |
 | `coverage` | every base the fragment covers (fraction of each bin) | — | Matrices and tracks only |
 | `cuts_stranded` | the read 5′ end of a stranded store | 1 | ChIP-exo; same as `cuts` on such a store |
 
@@ -96,6 +98,23 @@ Both kinds of fragment around a protected site put their ends at its edges, but 
 - **Fragments that abut the site** from either side do the opposite: those downstream start at its right edge (`cuts_plus`), and those upstream end at its left edge (`cuts_minus`).
 
 The combined `cuts` profile shows a dip between two edge peaks either way. The strand split tells you which kind of fragment the signal comes from.
+
+`cuts_proximal` and `cuts_distal` split the two ends by distance to the anchor centre instead of by orientation. For a fragment that contains the site, the proximal end is the cut at the nearer edge of the protected particle and the distal end is the other edge; for a fragment off to one side, the proximal end is the one facing the site. A fragment centred exactly on the anchor counts its upstream end as proximal, so `cuts_proximal + cuts_distal == cuts` always. Stranded stores (ChIP-exo) have one end per read, so these two features raise an error there.
+
+### Filtering by motif overlap
+
+`motif_overlap=` (on `vplot`, `to_matrix`, `cut_site_footprint` and `extract_events`) keeps fragments by how they sit on each anchor's motif interval, independently of `feature`:
+
+| `motif_overlap` | Keeps fragments that |
+| :--- | :--- |
+| `None` (default) | all fragments |
+| `"any"` | overlap the motif by at least 1 bp |
+| `"full"` | contain the whole motif |
+| `"none"` | do not overlap the motif |
+
+The motif interval is the BED `start`/`end`, or the `start`/`end` columns of a DataFrame (kept even when a `center` column sets the window centre). Anchors given only as a centre use the 1-bp interval `[center - 0.5, center + 0.5)`. `"any"` and `"none"` partition the fragments, so their counts add up to the unfiltered result.
+
+Restricting to overlapping fragments confines the signal to the region within half a fragment length of the motif, by construction. Normalise such V-plots with `"cpm"`, not `"expected"` (whose flank background is then depleted; pyvplot warns), and do not feed them to `footprint_score`, whose centre-versus-shoulder contrast becomes circular. `VPlot.diff` refuses to compare V-plots built with different `feature` or `motif_overlap`.
 
 **Defaults differ**: `vplot` always defaults to `midpoint`, while `to_matrix` and the track exporters default to the assay's `default_feature` (`cuts` for ChEC and ATAC). In analysis code, pass `feature=` explicitly.
 

@@ -975,6 +975,7 @@ class FragmentStore:
         pos_bin: int = 1,
         len_bin: int = 1,
         feature: str = "midpoint",
+        motif_overlap: str | None = None,
         use_numba: bool | None = None,
     ) -> VPlot:
         """V-plot around ``anchors``. Same as [`pyvplot.vplot`][pyvplot.vplot] with this store."""
@@ -983,7 +984,7 @@ class FragmentStore:
         return vplot(
             self, anchors, flank=flank, upstream=upstream, downstream=downstream,
             min_len=min_len, max_len=max_len, pos_bin=pos_bin, len_bin=len_bin,
-            feature=feature, use_numba=use_numba,
+            feature=feature, motif_overlap=motif_overlap, use_numba=use_numba,
         )
 
     def to_matrix(
@@ -996,6 +997,7 @@ class FragmentStore:
         feature: str | None = None,
         len_range: tuple[int, int] | str | None = None,
         normalize: str | None = None,
+        motif_overlap: str | None = None,
         use_numba: bool | None = None,
     ) -> SignalMatrix:
         """Per-anchor binned signal. Same as [`pyvplot.to_matrix`][pyvplot.to_matrix] with this store."""
@@ -1004,7 +1006,7 @@ class FragmentStore:
         return to_matrix(
             self, anchors, flank=flank, upstream=upstream, downstream=downstream,
             bin_size=bin_size, feature=feature, len_range=len_range, normalize=normalize,
-            use_numba=use_numba,
+            motif_overlap=motif_overlap, use_numba=use_numba,
         )
 
     def cut_site_footprint(
@@ -1019,6 +1021,8 @@ class FragmentStore:
         normalize: str | None = None,
         agg: str = "mean",
         keep_matrices: bool = True,
+        split_by: str = "strand",
+        motif_overlap: str | None = None,
         use_numba: bool | None = None,
     ) -> CutSiteFootprint:
         """1-bp cut-site profile. Same as [`pyvplot.cut_site_footprint`][pyvplot.cut_site_footprint] with this store."""
@@ -1027,7 +1031,8 @@ class FragmentStore:
         return cut_site_footprint(
             self, anchors, flank=flank, upstream=upstream, downstream=downstream,
             bin_size=bin_size, len_range=len_range, split_strands=split_strands,
-            normalize=normalize, agg=agg, keep_matrices=keep_matrices, use_numba=use_numba,
+            normalize=normalize, agg=agg, keep_matrices=keep_matrices, split_by=split_by,
+            motif_overlap=motif_overlap, use_numba=use_numba,
         )
 
     def footprint_score(
@@ -1058,13 +1063,14 @@ class FragmentStore:
         downstream: int | None = None,
         len_range: tuple[int, int] | str | None = None,
         overlap_mode: str = "midpoint",
+        motif_overlap: str | None = None,
     ) -> pd.DataFrame:
         """Per-fragment table around anchors. Same as [`pyvplot.extract_events`][pyvplot.extract_events]."""
         from pyvplot.extract import extract_events
 
         return extract_events(
             self, anchors, flank=flank, upstream=upstream, downstream=downstream,
-            len_range=len_range, overlap_mode=overlap_mode,
+            len_range=len_range, overlap_mode=overlap_mode, motif_overlap=motif_overlap,
         )
 
     def insert_size_distribution(

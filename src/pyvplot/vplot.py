@@ -75,7 +75,8 @@ class VPlot:
     assay:
         Name of the assay preset (e.g., ``"chec"``, ``"atac"``).
     feature:
-        Geometric feature accumulated (``"midpoint"``, ``"cuts"``, etc.).
+        Geometric feature accumulated (``"midpoint"``, ``"cuts"``,
+        ``"cuts_proximal"``, etc.).
     normalization:
         Name of normalization applied (``"raw"``, ``"cpm"``, ``"expected"``,
         ``"log2fc"``, etc.).
@@ -86,6 +87,9 @@ class VPlot:
         per length bin from the source store (enables ``expected_from="genome"``).
     metadata:
         Arbitrary metadata dictionary.
+    motif_overlap:
+        Motif-overlap filter used at extraction (``None``, ``"any"``,
+        ``"full"`` or ``"none"``).
     """
 
     counts: np.ndarray
@@ -99,12 +103,14 @@ class VPlot:
     is_diff: bool = False
     genome_len_counts: np.ndarray | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    motif_overlap: str | None = None
 
     def __repr__(self) -> str:
+        ov = "" if self.motif_overlap is None else f"motif_overlap={self.motif_overlap!r}, "
         return (
             f"VPlot(pos=[{self.pos_edges[0]:g}, {self.pos_edges[-1]:g}) bp step {self.pos_bin:g}, "
             f"length=[{self.len_edges[0]:g}, {self.len_edges[-1]:g}) bp step {self.len_bin:g}, "
-            f"shape={self.shape}, n_anchors={self.n_anchors}, feature={self.feature!r}, "
+            f"shape={self.shape}, n_anchors={self.n_anchors}, feature={self.feature!r}, {ov}"
             f"normalization={self.normalization!r}, assay={self.assay!r})"
         )
 
@@ -149,6 +155,7 @@ class VPlot:
             is_diff=self.is_diff if is_diff is None else is_diff,
             genome_len_counts=None if self.genome_len_counts is None else self.genome_len_counts.copy(),
             metadata=dict(self.metadata) if metadata is None else metadata,
+            motif_overlap=self.motif_overlap,
         )
 
     def _expected_row_rates(
@@ -241,6 +248,15 @@ class VPlot:
             return self._clone(out, normalization="density")
 
         if m in {"expected", "log2_oe"}:
+            if self.motif_overlap in {"any", "full"}:
+                warnings.warn(
+                    f"This V-plot keeps only fragments overlapping the motif "
+                    f"(motif_overlap={self.motif_overlap!r}), so its flanks are depleted by "
+                    f"construction and {method!r} inflates short-fragment rows. Prefer 'cpm', or "
+                    "compare against an unfiltered V-plot.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             exp = self._expected_row_rates(expected_from=expected_from, flank_frac=flank_frac)
             starved = (exp == 0.0) & (np.sum(arr, axis=1) > 0.0)
             if np.any(starved):
@@ -343,6 +359,11 @@ class VPlot:
             and np.allclose(self.len_edges, other.len_edges)
         ):
             raise ValueError("Cannot diff VPlots with different position or length bins.")
+        if self.feature != other.feature or self.motif_overlap != other.motif_overlap:
+            raise ValueError(
+                f"Cannot diff VPlots built differently: feature {self.feature!r} vs {other.feature!r}, "
+                f"motif_overlap {self.motif_overlap!r} vs {other.motif_overlap!r}."
+            )
 
         a = self
         b = other
@@ -394,6 +415,7 @@ class VPlot:
             is_diff=True,
             genome_len_counts=None,
             metadata={"diff_mode": m, "pseudocount": pc},
+            motif_overlap=self.motif_overlap,
         )
 
     def marginal_position(
@@ -532,6 +554,7 @@ def vplot(
     pos_bin: int = 1,
     len_bin: int = 1,
     feature: str = "midpoint",
+    motif_overlap: str | None = None,
     use_numba: bool | None = None,
 ) -> VPlot:
     """Count fragments by (position relative to anchor, fragment length) around ``anchors``.
@@ -565,7 +588,19 @@ def vplot(
         Which point of each fragment is placed on the position axis:
         ``"midpoint"`` (default; the classic V-plot), ``"cuts"`` (both ends,
         each counted once), ``"cuts_plus"`` (left end in anchor orientation),
-        or ``"cuts_minus"`` (right end).
+        ``"cuts_minus"`` (right end), ``"cuts_proximal"`` (the end nearer the
+        anchor centre) or ``"cuts_distal"`` (the farther end). For a fragment
+        centred exactly on the anchor, the left end counts as proximal, so
+        ``cuts_proximal + cuts_distal == cuts``. The proximal/distal pair needs
+        an unstranded store.
+    motif_overlap:
+        Keep only fragments that overlap each anchor's motif interval by at
+        least 1 bp (``"any"``), contain all of it (``"full"``), or miss it
+        (``"none"``). ``None`` (default) applies no filter. The interval is
+        the BED start/end (or ``start``/``end`` columns); point anchors use
+        ``[center - 0.5, center + 0.5)``. Filtering to overlapping fragments
+        empties the flanks by construction: normalise with ``"cpm"``, not
+        ``"expected"``.
     use_numba:
         ``None`` uses Numba when installed; ``False`` forces the NumPy path.
 
@@ -601,6 +636,7 @@ def vplot(
         len_bin=len_bin,
         feature=feature,
         use_numba=use_numba,
+        motif_overlap=motif_overlap,
     )
 
     pos_edges = np.arange(-up, dn + pos_bin, pos_bin, dtype=np.float64)
@@ -627,4 +663,5 @@ def vplot(
         normalization="raw",
         is_diff=False,
         genome_len_counts=genome_len_counts,
+        motif_overlap=motif_overlap,
     )
