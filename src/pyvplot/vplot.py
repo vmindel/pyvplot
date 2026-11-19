@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -239,8 +240,20 @@ class VPlot:
             out = arr / total if total > 0.0 else np.zeros_like(arr)
             return self._clone(out, normalization="density")
 
-        if m == "expected":
+        if m in {"expected", "log2_oe"}:
             exp = self._expected_row_rates(expected_from=expected_from, flank_frac=flank_frac)
+            starved = (exp == 0.0) & (np.sum(arr, axis=1) > 0.0)
+            if np.any(starved):
+                warnings.warn(
+                    f"{int(starved.sum())} of {len(exp)} length rows have counts but zero expected "
+                    f"background (expected_from={expected_from!r}); they are divided by "
+                    f"pseudocount={pseudocount:g} and will dominate the plot. Use a wider flank, "
+                    "coarser len_bin, more anchors, or expected_from='genome'.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+        if m == "expected":
             out = arr / (exp[:, None] + pseudocount)
             # Rows with zero expected AND zero observed remain 0
             zero_rows = (exp == 0.0) & (np.sum(arr, axis=1) == 0.0)
@@ -248,7 +261,6 @@ class VPlot:
             return self._clone(out, normalization=f"expected:{expected_from}")
 
         if m == "log2_oe":
-            exp = self._expected_row_rates(expected_from=expected_from, flank_frac=flank_frac)
             out = np.log2((arr + pseudocount) / (exp[:, None] + pseudocount))
             return self._clone(out, normalization=f"log2_oe:{expected_from}")
 
@@ -262,6 +274,22 @@ class VPlot:
             f"Unknown normalization method {method!r}. Expected one of: "
             "'cpm', 'cpm_total', 'per_anchor', 'density', 'expected', 'log2_oe', 'row_zscore'."
         )
+
+    def raw_count_scale(self) -> float | None:
+        """Value of one raw count in this V-plot's current units, or ``None`` if unknown.
+
+        Known for ``raw``, ``cpm``, ``cpm_total`` and ``per_anchor`` (and smoothed
+        versions of them); ``None`` for shape-changing normalisations such as
+        ``expected`` or ``density``.
+        """
+        n_frag = float(self.n_fragments) / 1e6 if self.n_fragments > 0 else 1.0
+        n_anc = float(self.n_anchors) if self.n_anchors > 0 else 1.0
+        return {
+            "raw": 1.0,
+            "cpm": 1.0 / (n_frag * n_anc),
+            "cpm_total": 1.0 / n_frag,
+            "per_anchor": 1.0 / n_anc,
+        }.get(self.normalization)
 
     def smooth(
         self,
@@ -278,7 +306,7 @@ class VPlot:
         self,
         other: VPlot,
         mode: str = "log2fc",
-        pseudocount: float = 0.5,
+        pseudocount: float | None = None,
         smooth_sigma: float | tuple[float, float] | None = None,
         normalize_first: str | None = "cpm",
         smooth_before: bool = True,
@@ -292,7 +320,13 @@ class VPlot:
         mode:
             Comparison metric: ``"log2fc"``, ``"subtract"``, ``"ratio"``, or ``"zscore"``.
         pseudocount:
-            Pseudocount added to numerator and denominator for ``"log2fc"`` and ``"ratio"``.
+            Added to numerator and denominator for ``"log2fc"`` and ``"ratio"``.
+            ``None`` (default) adds half a raw count per cell, converted into
+            each V-plot's own units (see :meth:`raw_count_scale`), so the result
+            does not shrink towards 0 as sequencing depth grows. A number is
+            added as-is, in the V-plots' current units. For normalisations
+            without a known count scale (``expected``, ``density``, ...) the
+            default falls back to ``0.5`` in those units.
         smooth_sigma:
             Optional 2D Gaussian smoothing ``(sigma_len, sigma_pos)``.
         normalize_first:
@@ -318,13 +352,20 @@ class VPlot:
             a = a.smooth(smooth_sigma)
             b = b.smooth(smooth_sigma)
 
+        if pseudocount is None:
+            sa, sb = a.raw_count_scale(), b.raw_count_scale()
+            pc_a = 0.5 * sa if sa is not None else 0.5
+            pc_b = 0.5 * sb if sb is not None else 0.5
+        else:
+            pc_a = pc_b = float(pseudocount)
+
         m = mode.lower()
         if m == "log2fc":
-            vals = np.log2((a.counts + pseudocount) / (b.counts + pseudocount))
+            vals = np.log2((a.counts + pc_a) / (b.counts + pc_b))
         elif m == "subtract":
             vals = a.counts - b.counts
         elif m == "ratio":
-            vals = (a.counts + pseudocount) / (b.counts + pseudocount)
+            vals = (a.counts + pc_a) / (b.counts + pc_b)
         elif m == "zscore":
             delta = a.counts - b.counts
             sd = float(np.std(delta))
@@ -348,7 +389,7 @@ class VPlot:
             normalization=f"diff:{m}",
             is_diff=True,
             genome_len_counts=None,
-            metadata={"diff_mode": m, "pseudocount": pseudocount},
+            metadata={"diff_mode": m, "pseudocount": (pc_a, pc_b)},
         )
 
     def marginal_position(

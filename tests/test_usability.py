@@ -122,3 +122,44 @@ def test_reprs_are_short(store, anchors):
     for o in objs:
         r = repr(o)
         assert len(r) < 300 and "array(" not in r, r
+
+
+def test_expected_normalization_warns_on_empty_flanks(store, anchors):
+    v = store.vplot(anchors, flank=100, min_len=20, max_len=200)
+    with pytest.warns(UserWarning, match="zero expected"):
+        v.normalize("expected")
+
+
+def test_simulate_chec_shapes_and_unbound_condition():
+    wt, anchors = vp.datasets.simulate_chec(n_sites=10, seed=3)
+    ko, anchors_ko = vp.datasets.simulate_chec(n_sites=10, tf_fragments=0, seed=3)
+    assert list(anchors.columns) == ["chrom", "center", "strand"]
+    assert len(anchors) == 10 and anchors.index[0] == "site_0"
+    pd.testing.assert_frame_equal(anchors, anchors_ko)
+    assert wt.n_fragments == 10 * (30 + 80 + 100)
+    tf_wt = wt.to_matrix(anchors, flank=20, bin_size=40, feature="midpoint", len_range="tf").values.sum()
+    tf_ko = ko.to_matrix(anchors, flank=20, bin_size=40, feature="midpoint", len_range="tf").values.sum()
+    assert tf_wt > 5 * max(tf_ko, 1)
+
+
+def test_diff_log2fc_does_not_depend_on_off_target_depth():
+    """Scaling both libraries' depth with off-target reads must not shrink the default log2FC.
+
+    Each store is deepened in proportion to its size so the library-size ratio,
+    which CPM legitimately uses, stays the same.
+    """
+    wt, anchors = vp.datasets.simulate_chec(n_sites=30, seed=1)
+    ko, _ = vp.datasets.simulate_chec(n_sites=30, tf_fragments=0, seed=2)
+
+    def deepen(store: vp.FragmentStore, n: int) -> vp.FragmentStore:
+        s = np.arange(10_000_000, 10_000_000 + 1_000 * n, 1_000, dtype=np.int64)
+        extra = vp.FragmentStore.from_arrays({"chr1": s}, {"chr1": s + 100}, assay="chec")
+        return vp.FragmentStore.merge([store, extra])
+
+    kw = dict(flank=250, min_len=20, max_len=200, pos_bin=10, len_bin=10)
+    shallow = ko.vplot(anchors, **kw).diff(wt.vplot(anchors, **kw))
+    deep = deepen(ko, 30 * ko.n_fragments).vplot(anchors, **kw).diff(
+        deepen(wt, 30 * wt.n_fragments).vplot(anchors, **kw)
+    )
+    np.testing.assert_allclose(deep.counts, shallow.counts, atol=1e-9)
+    assert shallow.counts.min() < -3
