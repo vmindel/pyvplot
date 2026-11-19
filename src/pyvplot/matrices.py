@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from pyvplot.assays import resolve_len_range
 from pyvplot.extract import accumulate_matrix
 from pyvplot.store import FragmentStore
 
@@ -17,22 +18,10 @@ def _resolve_len_range(
     len_range: tuple[int, int] | str | None,
 ) -> tuple[int, int] | None:
     """Resolve an explicit ``(min_len, max_len)`` tuple or named assay size bin."""
-    if len_range is None:
-        return None
-    if isinstance(len_range, str):
-        if len_range not in store.assay.size_bins:
-            available = ", ".join(sorted(store.assay.size_bins)) or "(none)"
-            raise ValueError(
-                f"Unknown size bin {len_range!r} for assay {store.assay.name!r}. "
-                f"Available size bins: {available}."
-            )
-        return store.assay.size_bins[len_range]
-    if len(len_range) != 2:
-        raise ValueError(f"Expected (min_len, max_len) tuple, got {len_range!r}.")
-    return (int(len_range[0]), int(len_range[1]))
+    return resolve_len_range(store.assay, len_range)
 
 
-@dataclass
+@dataclass(repr=False)
 class SignalMatrix:
     """Per-anchor binned signal matrix ready for heatmaps and ``EnrichedHeatmap``.
 
@@ -78,6 +67,14 @@ class SignalMatrix:
     assay: str = "generic"
     normalization: str = "raw"
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __repr__(self) -> str:
+        lr = "all" if self.len_range is None else f"{self.len_range[0]}-{self.len_range[1]} bp"
+        return (
+            f"SignalMatrix(shape={self.shape}, window=[-{self.upstream}, +{self.downstream}) bp, "
+            f"bin_size={self.bin_size}, feature={self.feature!r}, lengths={lr}, "
+            f"normalization={self.normalization!r}, assay={self.assay!r})"
+        )
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -365,7 +362,7 @@ def to_matrix(
     return mat
 
 
-@dataclass
+@dataclass(repr=False)
 class CutSiteFootprint:
     """1-bp resolution cleavage cut-site footprint around genomic anchors.
 
@@ -400,6 +397,14 @@ class CutSiteFootprint:
     matrix_minus: SignalMatrix | None = None
     n_anchors: int = 0
     agg: str = "mean"
+
+    def __repr__(self) -> str:
+        span = f"[{self.pos[0]:g}, {self.pos[-1]:g}]" if len(self.pos) else "[]"
+        return (
+            f"CutSiteFootprint(pos={span} bp, n_bins={len(self.pos)}, n_anchors={self.n_anchors}, "
+            f"split_strands={self.plus is not None}, agg={self.agg!r}, "
+            f"has_matrices={self.matrix_combined is not None})"
+        )
 
     def to_dataframe(self) -> pd.DataFrame:
         """Export cut-site footprint to a tidy DataFrame (``pos``, ``strand``, ``signal``)."""

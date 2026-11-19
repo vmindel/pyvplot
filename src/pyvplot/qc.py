@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from pyvplot.assays import resolve_len_range
 from pyvplot.extract import HAS_NUMBA, njit
 from pyvplot.store import FragmentStore
 
@@ -223,7 +224,7 @@ def frip(
     return (score, per_peak) if return_per_peak else score
 
 
-@dataclass
+@dataclass(repr=False)
 class PhasogramResult:
     """Nucleosome phasing pair-distance histogram and NRL estimate.
 
@@ -263,6 +264,18 @@ class PhasogramResult:
     def __post_init__(self) -> None:
         if self.peak_positions is None:
             self.peak_positions = np.empty(0, dtype=np.float64)
+
+    def __repr__(self) -> str:
+        def _f(x: float | None) -> str:
+            return "None" if x is None else f"{x:.1f}"
+
+        r2 = "None" if self.r_squared is None else f"{self.r_squared:.3f}"
+        return (
+            f"PhasogramResult(nrl={_f(self.nrl)}, nrl_peak_fit={_f(self.nrl_peak_fit)}, "
+            f"nrl_fft={_f(self.nrl_fft)}, r_squared={r2}, n_peaks={len(self.peak_positions)}, "
+            f"max_lag={int(self.lags[-1]) if len(self.lags) else 0}, "
+            f"n_pairs={int(np.sum(self.counts)):,})"
+        )
 
     def to_dataframe(self) -> pd.DataFrame:
         """Return phasogram curve as a pandas DataFrame (``lag``, ``count``, ``smoothed``)."""
@@ -423,7 +436,7 @@ def phasogram(
     store: FragmentStore,
     max_lag: int = 1000,
     chroms: Collection[str] | None = None,
-    len_range: tuple[int, int] | None = None,
+    len_range: tuple[int, int] | str | None = None,
     mode: str = "midpoint",
     max_positions_per_chrom: int | None = None,
     smooth_sigma: float = 5.0,
@@ -444,7 +457,8 @@ def phasogram(
         Optional subset of chromosomes to include.
     len_range:
         Optional inclusive ``(min_len, max_len)`` fragment-length filter (e.g.,
-        ``(135, 165)`` for mononucleosomes).
+        ``(135, 165)`` for mononucleosomes), or the name of a size bin of the
+        store's assay (``"nucleosome"``, ``"mononucleosome"``, ...).
     mode:
         Position used per fragment: ``"midpoint"`` (dyad-to-dyad, default),
         ``"start"`` (same-strand 5' left ends), or ``"end"`` (right ends).
@@ -465,6 +479,7 @@ def phasogram(
     if mode not in {"midpoint", "start", "end"}:
         raise ValueError(f"Invalid mode {mode!r}; expected 'midpoint', 'start', or 'end'.")
 
+    len_range = resolve_len_range(store.assay, len_range)
     run_numba = HAS_NUMBA if use_numba is None else bool(use_numba and HAS_NUMBA)
     target_chroms = list(store.chroms) if chroms is None else [c for c in store.chroms if c in set(chroms)]
 

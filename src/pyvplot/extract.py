@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import math
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from pyvplot.assays import resolve_len_range
 from pyvplot.store import FragmentStore
 
 try:
@@ -45,6 +47,9 @@ _FEATURE_CODES: dict[str, int] = {
     "cuts_plus": FEATURE_CUTS_PLUS,
     "cuts_minus": FEATURE_CUTS_MINUS,
     "coverage": FEATURE_COVERAGE,
+    # ChIP-exo preset default. Stranded stores already hold one 5' end per read,
+    # and the kernels read per-fragment strand, so this is the same as "cuts".
+    "cuts_stranded": FEATURE_CUTS,
 }
 
 
@@ -206,6 +211,33 @@ def normalize_anchors(anchors: Any) -> NormalizedAnchors:
         region_index=region_index,
         chrom_groups=chrom_groups,
     )
+
+
+def _warn_missing_chroms(store: FragmentStore, norm: NormalizedAnchors) -> None:
+    """Warn when anchors sit on chromosomes the store has no fragments for.
+
+    The usual cause is a naming mismatch (``chr1`` vs ``1``), which otherwise
+    produces silent all-zero rows.
+    """
+    if norm.n_anchors == 0:
+        return
+    missing = [
+        c for c in norm.chrom_groups if c not in store.starts or len(store.starts[c]) == 0
+    ]
+    if not missing:
+        return
+    n_missing = int(sum(len(norm.chrom_groups[c]) for c in missing))
+    shown = ", ".join(repr(c) for c in missing[:5]) + (" ..." if len(missing) > 5 else "")
+    store_chroms = ", ".join(repr(c) for c in store.chroms[:5]) + (
+        " ..." if len(store.chroms) > 5 else ""
+    )
+    msg = (
+        f"{n_missing} of {norm.n_anchors} anchors are on chromosomes with no fragments in the "
+        f"store ({shown}); their rows will be zero. Store chromosomes: {store_chroms}."
+    )
+    if n_missing == norm.n_anchors:
+        msg += " No anchor matched: check chromosome naming ('chr1' vs '1')."
+    warnings.warn(msg, UserWarning, stacklevel=3)
 
 
 # ----------------------------------------------------------------------
@@ -807,6 +839,7 @@ def accumulate_vplot(
 
     if norm.n_anchors == 0 or store.n_fragments == 0:
         return grid, norm
+    _warn_missing_chroms(store, norm)
 
     run_numba = HAS_NUMBA if use_numba is None else bool(use_numba and HAS_NUMBA)
     empty_strands = np.empty(0, dtype=np.int8)
@@ -920,6 +953,7 @@ def accumulate_matrix(
 
     if norm.n_anchors == 0 or store.n_fragments == 0:
         return out, norm
+    _warn_missing_chroms(store, norm)
 
     if len_range is None:
         min_len = 0
@@ -991,7 +1025,7 @@ def extract_events(
     flank: int = 300,
     upstream: int | None = None,
     downstream: int | None = None,
-    len_range: tuple[int, int] | None = None,
+    len_range: tuple[int, int] | str | None = None,
     overlap_mode: str = "midpoint",
 ) -> pd.DataFrame:
     """Extract a compact per-fragment event table around ``anchors``.
@@ -1007,7 +1041,8 @@ def extract_events(
     upstream, downstream:
         Optional asymmetric window bounds (bp).
     len_range:
-        Optional inclusive ``(min_len, max_len)`` fragment length filter.
+        Optional inclusive ``(min_len, max_len)`` fragment length filter, or the
+        name of a size bin of the store's assay (``"tf"``, ``"nfr"``, ...).
     overlap_mode:
         Which fragments to include:
         - ``"midpoint"``: fragments whose midpoint falls in ``[-upstream, downstream)``
@@ -1027,15 +1062,17 @@ def extract_events(
             f"Invalid overlap_mode {overlap_mode!r}; expected 'midpoint', 'any', or 'cuts'."
         )
 
+    resolved_len = resolve_len_range(store.assay, len_range)
     norm = normalize_anchors(anchors)
     if norm.n_anchors == 0 or store.n_fragments == 0:
         cols = ["anchor_idx", "rel_mid", "rel_left", "rel_right", "frag_len"]
         if store.is_stranded:
             cols.append("frag_strand")
         return pd.DataFrame(columns=cols)
+    _warn_missing_chroms(store, norm)
 
-    min_len = 0 if len_range is None else int(len_range[0])
-    max_len = 2_147_483_647 if len_range is None else int(len_range[1])
+    min_len = 0 if resolved_len is None else resolved_len[0]
+    max_len = 2_147_483_647 if resolved_len is None else resolved_len[1]
 
     a_idxs_list: list[np.ndarray] = []
     rel_mid_list: list[np.ndarray] = []

@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from pyvplot.assays import resolve_len_range
 from pyvplot.extract import accumulate_vplot
 from pyvplot.store import FragmentStore
 
@@ -49,7 +50,7 @@ def _gaussian_filter_2d(
         return out
 
 
-@dataclass
+@dataclass(repr=False)
 class VPlot:
     """2D fragment-length vs. relative-position histogram around genomic anchors.
 
@@ -97,6 +98,14 @@ class VPlot:
     is_diff: bool = False
     genome_len_counts: np.ndarray | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __repr__(self) -> str:
+        return (
+            f"VPlot(pos=[{self.pos_edges[0]:g}, {self.pos_edges[-1]:g}) bp step {self.pos_bin:g}, "
+            f"length=[{self.len_edges[0]:g}, {self.len_edges[-1]:g}) bp step {self.len_bin:g}, "
+            f"shape={self.shape}, n_anchors={self.n_anchors}, feature={self.feature!r}, "
+            f"normalization={self.normalization!r}, assay={self.assay!r})"
+        )
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -344,10 +353,17 @@ class VPlot:
 
     def marginal_position(
         self,
-        len_range: tuple[float, float] | None = None,
+        len_range: tuple[float, float] | str | None = None,
         agg: str = "sum",
     ) -> pd.DataFrame:
-        """Collapse the V-plot along fragment length to a 1D positional profile."""
+        """Collapse the V-plot along fragment length to a 1D positional profile.
+
+        ``len_range`` keeps length rows whose bin centre lies in the inclusive
+        ``(min_len, max_len)`` range; a size-bin name of this V-plot's assay
+        (``"tf"``, ``"nfr"``, ...) also works. Returns columns ``pos`` and ``value``.
+        """
+        if isinstance(len_range, str):
+            len_range = resolve_len_range(self.assay, len_range)
         if len_range is None:
             sub = self.counts
         else:
@@ -371,7 +387,12 @@ class VPlot:
         pos_range: tuple[float, float] | None = None,
         agg: str = "sum",
     ) -> pd.DataFrame:
-        """Collapse the V-plot along position to a 1D fragment-length profile."""
+        """Collapse the V-plot along position to a 1D fragment-length profile.
+
+        ``pos_range`` keeps position columns whose bin centre lies in the inclusive
+        ``(min_pos, max_pos)`` range (bp from the anchor). Returns columns ``length``
+        and ``value``.
+        """
         if pos_range is None:
             sub = self.counts
         else:
@@ -433,6 +454,10 @@ class VPlotCollection:
     def __len__(self) -> int:
         return len(self._items)
 
+    def __repr__(self) -> str:
+        labels = [", ".join(f"{k}={v}" for k, v in meta.items()) for _, meta in self._items]
+        return f"VPlotCollection({len(self)} V-plots: {'; '.join(labels) or 'empty'})"
+
     @property
     def items(self) -> list[tuple[VPlot, dict[str, Any]]]:
         return list(self._items)
@@ -464,31 +489,59 @@ def vplot(
     feature: str = "midpoint",
     use_numba: bool | None = None,
 ) -> VPlot:
-    """Compute a 2D V-plot (fragment length vs. relative position) around ``anchors``.
+    """Count fragments by (position relative to anchor, fragment length) around ``anchors``.
+
+    Each fragment within the window adds 1 to the cell given by its ``feature``
+    position (relative to the anchor centre, in the anchor's 5'->3' orientation)
+    and its length. Summed over anchors, protected TF sites give a V whose
+    vertex sits at the anchor; nucleosomes give a broad band near 150 bp.
 
     Parameters
     ----------
     store:
         :class:`~pyvplot.store.FragmentStore` to query.
     anchors:
-        Anchor table (DataFrame, dict, list, or BED file path).
+        Anchor table: DataFrame (``chrom`` + ``center``, or ``chrom`` + ``start``
+        + ``end``; optional ``strand``), dict of columns, or a BED file path.
+        ``-`` strand anchors are mirrored so upstream is always on the left.
     flank:
-        Symmetric half-window (bp) around each anchor center when ``upstream`` /
-        ``downstream`` are not given.
+        Half-window (bp) on each side of the anchor centre.
     upstream, downstream:
-        Optional asymmetric window bounds (bp) around each anchor center.
+        Asymmetric window (bp), relative to anchor orientation. Override ``flank``.
     min_len, max_len:
-        Half-open fragment-length range ``[min_len, max_len)`` (bp).
+        Length axis, half-open ``[min_len, max_len)`` bp. ``max_len - min_len``
+        must be a multiple of ``len_bin``.
     pos_bin:
-        Bin width along relative position (bp).
+        Bin width along position (bp). ``upstream + downstream`` must be a
+        multiple of it.
     len_bin:
         Bin width along fragment length (bp).
     feature:
-        Feature to project onto position: ``"midpoint"`` (default for V-plots),
-        ``"cuts"``, ``"cuts_plus"``, or ``"cuts_minus"``.
+        Which point of each fragment is placed on the position axis:
+        ``"midpoint"`` (default; the classic V-plot), ``"cuts"`` (both ends,
+        each counted once), ``"cuts_plus"`` (left end in anchor orientation),
+        or ``"cuts_minus"`` (right end).
     use_numba:
-        Override automatic Numba dispatch (``True`` / ``False`` / ``None``).
+        ``None`` uses Numba when installed; ``False`` forces the NumPy path.
+
+    Returns
+    -------
+    VPlot
+        Raw counts in ``.counts`` with shape ``(n_len, n_pos)``. Normalise with
+        :meth:`VPlot.normalize` before comparing samples.
+
+    Examples
+    --------
+    >>> v = vp.vplot(store, "motifs.bed", flank=300, min_len=20, max_len=250, pos_bin=5, len_bin=5)
+    >>> v.normalize("expected").plot()
     """
+    if isinstance(min_len, str) or isinstance(max_len, str):
+        raise TypeError(
+            "vplot() needs numeric min_len/max_len: they are the edges of the length axis "
+            "[min_len, max_len), not a filter. Named size bins such as 'tf' are accepted by "
+            "the len_range= argument of to_matrix(), cut_site_footprint(), footprint_score(), "
+            "phasogram() and extract_events()."
+        )
     up = flank if upstream is None else int(upstream)
     dn = flank if downstream is None else int(downstream)
 

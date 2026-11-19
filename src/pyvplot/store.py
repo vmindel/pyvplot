@@ -7,12 +7,17 @@ import json
 from collections import defaultdict
 from collections.abc import Collection, Iterable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 
 from pyvplot.assays import AssayConfig, get_assay
+
+if TYPE_CHECKING:
+    from pyvplot.matrices import CutSiteFootprint, SignalMatrix
+    from pyvplot.qc import PhasogramResult
+    from pyvplot.vplot import VPlot
 
 # SAM flags: unmapped (0x4) | mate unmapped (0x8) | secondary (0x100) | qcfail (0x200) | supplementary (0x800)
 DEFAULT_PAIRED_EXCLUDE_FLAGS = 0x4 | 0x8 | 0x100 | 0x200 | 0x800
@@ -955,59 +960,160 @@ class FragmentStore:
         raise ValueError(f"Unsupported format {fmt!r}; expected 'npz' or 'parquet'.")
 
     # ------------------------------------------------------------------
-    # Ergonomic convenience methods delegating to analytical modules
+    # Method forms of the analysis functions. Signatures mirror the module-level
+    # functions exactly (tests/test_store_methods.py enforces this).
     # ------------------------------------------------------------------
 
-    def vplot(self, anchors: Any, **kwargs: Any) -> Any:
-        """Compute a :class:`~pyvplot.vplot.VPlot` around ``anchors``."""
+    def vplot(
+        self,
+        anchors: Any,
+        flank: int = 300,
+        upstream: int | None = None,
+        downstream: int | None = None,
+        min_len: int = 20,
+        max_len: int = 250,
+        pos_bin: int = 1,
+        len_bin: int = 1,
+        feature: str = "midpoint",
+        use_numba: bool | None = None,
+    ) -> VPlot:
+        """V-plot around ``anchors``. Same as :func:`pyvplot.vplot` with this store."""
         from pyvplot.vplot import vplot
 
-        return vplot(self, anchors, **kwargs)
+        return vplot(
+            self, anchors, flank=flank, upstream=upstream, downstream=downstream,
+            min_len=min_len, max_len=max_len, pos_bin=pos_bin, len_bin=len_bin,
+            feature=feature, use_numba=use_numba,
+        )
 
-    def to_matrix(self, anchors: Any, **kwargs: Any) -> Any:
-        """Compute a size-stratified :class:`~pyvplot.matrices.SignalMatrix` around ``anchors``."""
+    def to_matrix(
+        self,
+        anchors: Any,
+        flank: int = 1000,
+        upstream: int | None = None,
+        downstream: int | None = None,
+        bin_size: int = 10,
+        feature: str | None = None,
+        len_range: tuple[int, int] | str | None = None,
+        normalize: str | None = None,
+        use_numba: bool | None = None,
+    ) -> SignalMatrix:
+        """Per-anchor binned signal. Same as :func:`pyvplot.to_matrix` with this store."""
         from pyvplot.matrices import to_matrix
 
-        return to_matrix(self, anchors, **kwargs)
+        return to_matrix(
+            self, anchors, flank=flank, upstream=upstream, downstream=downstream,
+            bin_size=bin_size, feature=feature, len_range=len_range, normalize=normalize,
+            use_numba=use_numba,
+        )
 
-    def cut_site_footprint(self, anchors: Any, **kwargs: Any) -> Any:
-        """Compute 1-bp cleavage cut-site footprints around ``anchors``."""
+    def cut_site_footprint(
+        self,
+        anchors: Any,
+        flank: int = 100,
+        upstream: int | None = None,
+        downstream: int | None = None,
+        bin_size: int = 1,
+        len_range: tuple[int, int] | str | None = None,
+        split_strands: bool = True,
+        normalize: str | None = None,
+        agg: str = "mean",
+        keep_matrices: bool = True,
+        use_numba: bool | None = None,
+    ) -> CutSiteFootprint:
+        """1-bp cut-site profile. Same as :func:`pyvplot.cut_site_footprint` with this store."""
         from pyvplot.matrices import cut_site_footprint
 
-        return cut_site_footprint(self, anchors, **kwargs)
+        return cut_site_footprint(
+            self, anchors, flank=flank, upstream=upstream, downstream=downstream,
+            bin_size=bin_size, len_range=len_range, split_strands=split_strands,
+            normalize=normalize, agg=agg, keep_matrices=keep_matrices, use_numba=use_numba,
+        )
 
-    def footprint_score(self, anchors: Any, **kwargs: Any) -> pd.DataFrame:
-        """Compute per-anchor footprint depth and protection scores."""
+    def footprint_score(
+        self,
+        anchors: Any,
+        motif_half_width: int = 10,
+        flank_width: int = 30,
+        len_range: tuple[int, int] | str | None = None,
+        feature: str = "cuts",
+        pseudocount: float = 0.05,
+        normalize: str | None = None,
+        use_numba: bool | None = None,
+    ) -> pd.DataFrame:
+        """Per-anchor protection scores. Same as :func:`pyvplot.footprint_score` with this store."""
         from pyvplot.matrices import footprint_score
 
-        return footprint_score(self, anchors, **kwargs)
+        return footprint_score(
+            self, anchors, motif_half_width=motif_half_width, flank_width=flank_width,
+            len_range=len_range, feature=feature, pseudocount=pseudocount,
+            normalize=normalize, use_numba=use_numba,
+        )
 
-    def extract_events(self, anchors: Any, **kwargs: Any) -> pd.DataFrame:
-        """Extract per-fragment relative coordinates around ``anchors``."""
+    def extract_events(
+        self,
+        anchors: Any,
+        flank: int = 300,
+        upstream: int | None = None,
+        downstream: int | None = None,
+        len_range: tuple[int, int] | str | None = None,
+        overlap_mode: str = "midpoint",
+    ) -> pd.DataFrame:
+        """Per-fragment table around anchors. Same as :func:`pyvplot.extract_events`."""
         from pyvplot.extract import extract_events
 
-        return extract_events(self, anchors, **kwargs)
+        return extract_events(
+            self, anchors, flank=flank, upstream=upstream, downstream=downstream,
+            len_range=len_range, overlap_mode=overlap_mode,
+        )
 
-    def insert_size_distribution(self, **kwargs: Any) -> pd.DataFrame:
-        """Compute insert-size histogram across stored fragments."""
+    def insert_size_distribution(
+        self,
+        min_len: int | None = None,
+        max_len: int | None = None,
+        normalize: bool = True,
+    ) -> pd.DataFrame:
+        """Fragment-length histogram. Same as :func:`pyvplot.insert_size_distribution`."""
         from pyvplot.qc import insert_size_distribution
 
-        return insert_size_distribution(self, **kwargs)
+        return insert_size_distribution(self, min_len=min_len, max_len=max_len, normalize=normalize)
 
-    def phasogram(self, **kwargs: Any) -> Any:
-        """Compute nucleosome phasing pair-distance histogram."""
+    def phasogram(
+        self,
+        max_lag: int = 1000,
+        chroms: Collection[str] | None = None,
+        len_range: tuple[int, int] | str | None = None,
+        mode: str = "midpoint",
+        max_positions_per_chrom: int | None = None,
+        smooth_sigma: float = 5.0,
+        min_peak_lag: int = 120,
+        max_peak_lag: int = 850,
+        expected_nrl_range: tuple[float, float] = (140.0, 240.0),
+        use_numba: bool | None = None,
+    ) -> PhasogramResult:
+        """Pair-distance histogram and NRL. Same as :func:`pyvplot.phasogram`."""
         from pyvplot.qc import phasogram
 
-        return phasogram(self, **kwargs)
+        return phasogram(
+            self, max_lag=max_lag, chroms=chroms, len_range=len_range, mode=mode,
+            max_positions_per_chrom=max_positions_per_chrom, smooth_sigma=smooth_sigma,
+            min_peak_lag=min_peak_lag, max_peak_lag=max_peak_lag,
+            expected_nrl_range=expected_nrl_range, use_numba=use_numba,
+        )
 
-    def frip(self, peaks: Any, **kwargs: Any) -> Any:
-        """Compute Fraction of Fragments in Peaks (FRiP)."""
+    def frip(
+        self,
+        peaks: Any,
+        mode: str = "midpoint",
+        return_per_peak: bool = False,
+    ) -> float | tuple[float, np.ndarray]:
+        """Fraction of fragments in peaks. Same as :func:`pyvplot.frip`."""
         from pyvplot.qc import frip
 
-        return frip(self, peaks, **kwargs)
+        return frip(self, peaks, mode=mode, return_per_peak=return_per_peak)
 
     def qc_summary(self, peaks: Any = None) -> dict[str, Any]:
-        """Compute summary QC statistics for this store."""
+        """Length statistics, size-bin fractions and optional FRiP. Same as :func:`pyvplot.qc_summary`."""
         from pyvplot.qc import qc_summary
 
         return qc_summary(self, peaks=peaks)

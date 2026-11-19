@@ -54,6 +54,8 @@ def to_binned_track(
     else:
         feat = feature
 
+    if feat == "cuts_stranded":
+        feat = "cuts"
     valid_feats = {"midpoint", "cuts", "cuts_plus", "cuts_minus", "coverage"}
     if feat not in valid_feats:
         raise ValueError(f"Unsupported feature {feat!r}; expected one of {sorted(valid_feats)}.")

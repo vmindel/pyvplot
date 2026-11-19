@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,42 @@ def _encode_sequence_kmers(seq: str, k: int) -> np.ndarray:
     return codes
 
 
+def _read_fasta(path: Path) -> dict[str, str]:
+    """Read a plain or gzipped FASTA into ``{name: sequence}`` (name = first word of header)."""
+    opener = gzip.open if path.suffix == ".gz" else open
+    out: dict[str, str] = {}
+    name: str | None = None
+    chunks: list[str] = []
+    with opener(path, "rt", encoding="ascii") as fh:
+        for line in fh:
+            if line.startswith(">"):
+                if name is not None:
+                    out[name] = "".join(chunks)
+                name = line[1:].split()[0] if line[1:].strip() else ""
+                chunks = []
+            else:
+                chunks.append(line.strip())
+    if name is not None:
+        out[name] = "".join(chunks)
+    return out
+
+
+def _open_genome(sequences: Any) -> Any:
+    """Open a FASTA path (via ``pysam.FastaFile`` when available); pass other inputs through."""
+    if not isinstance(sequences, (str, Path)):
+        return sequences
+    path = Path(sequences)
+    if not path.exists():
+        raise FileNotFoundError(f"FASTA file not found: {path}")
+    try:
+        import pysam
+
+        return pysam.FastaFile(str(path))
+    except (ImportError, OSError, ValueError):
+        # No pysam, plain-gzip FASTA, or no write access for the .fai index.
+        return _read_fasta(path)
+
+
 def _get_chrom_seq(sequences: Any, chrom: str) -> str | None:
     """Fetch a chromosome DNA sequence from a dict, pyfaidx.Fasta, or pysam.FastaFile."""
     if isinstance(sequences, dict):
@@ -106,6 +143,12 @@ class KmerBiasTable:
         self.cut_offset: int = k // 2 if cut_offset is None else int(cut_offset)
         if not (0 <= self.cut_offset < self.k):
             raise ValueError(f"cut_offset must be in [0, {self.k - 1}], got {self.cut_offset}.")
+
+    def __repr__(self) -> str:
+        return (
+            f"KmerBiasTable(k={self.k}, cut_offset={self.cut_offset}, "
+            f"weight_range=[{float(self.weights.min()):.3g}, {float(self.weights.max()):.3g}])"
+        )
 
     def __getitem__(self, kmer: str) -> float:
         if len(kmer) != self.k:
@@ -181,17 +224,43 @@ class KmerBiasTable:
         Computes ``(obs_freq + pseudocount) / (bg_freq + pseudocount)`` normalized
         to unit mean across all ``4**k`` k-mers. Right-end (minus-strand) cuts
         are reverse-complemented into the same 5'->3' cleavage frame as left-end cuts.
+
+        Parameters
+        ----------
+        store:
+            Control store (naked DNA digested with the same enzyme).
+        sequences:
+            Genome sequence: a FASTA path (plain, or bgzipped with an index),
+            a ``pysam.FastaFile`` / ``pyfaidx.Fasta``, or a ``{chrom: str}`` dict.
+            Chromosome names must match the store's.
+        k:
+            K-mer length. ``4**k`` weights are estimated, so k=6 needs on the
+            order of millions of cuts.
+        cut_offset:
+            Position of the cut inside the k-mer (default ``k // 2``).
+        chroms:
+            Restrict estimation to these chromosomes.
+        pseudocount:
+            Added to observed and background k-mer counts.
+
+        Raises
+        ------
+        ValueError
+            If none of the store's chromosomes are found in ``sequences``.
         """
+        sequences = _open_genome(sequences)
         offset = k // 2 if cut_offset is None else int(cut_offset)
         n_kmers = 4**k
         obs_counts = np.zeros(n_kmers, dtype=np.float64)
         bg_counts = np.zeros(n_kmers, dtype=np.float64)
 
         target_chroms = list(store.chroms) if chroms is None else [c for c in store.chroms if c in set(chroms)]
+        n_used = 0
         for chrom in target_chroms:
             seq = _get_chrom_seq(sequences, chrom)
             if seq is None or len(seq) < k:
                 continue
+            n_used += 1
             codes_fwd = _encode_sequence_kmers(seq, k)
             valid_bg = codes_fwd[codes_fwd >= 0]
             if len(valid_bg) > 0:
@@ -235,6 +304,12 @@ class KmerBiasTable:
                 if len(c_r) > 0:
                     obs_counts += np.bincount(c_r, minlength=n_kmers)
 
+        if n_used == 0:
+            raise ValueError(
+                f"None of the store's chromosomes ({', '.join(target_chroms[:5])}"
+                f"{' ...' if len(target_chroms) > 5 else ''}) were found in `sequences`. "
+                "Check chromosome naming ('chr1' vs '1')."
+            )
         obs_freq = (obs_counts + pseudocount) / np.sum(obs_counts + pseudocount)
         bg_freq = (bg_counts + pseudocount) / np.sum(bg_counts + pseudocount)
         weights = obs_freq / bg_freq
