@@ -121,11 +121,31 @@ to_bedgraph(frags, "tf_midpoints.bedGraph.gz", feature="midpoint", len_range="tf
 | `cuttag` | `(0, 0)` | `cuts` | `short`: `20–120`, `nucleosome`: `150–200` |
 | `chip_exo` | `(0, 0)` | `cuts_stranded` | Single-end stranded 5' stop sites |
 
+## Claude Code Skill
+
+`pyvplot` bundles an Agent Skill for Claude Code (modeled after `moodspy`). Install it once into `~/.claude/skills/pyvplot`:
+
+```bash
+pyvplot-install-skills
+```
+
+Use `--dest .claude/skills/pyvplot` for project-local installation or `--force` to update after upgrading `pyvplot`.
+
+## Documentation
+
+Full tutorials, API reference, and skill documentation are built with MkDocs Material:
+
+```bash
+uv pip install --python .venv/bin/python -e ".[dev,docs]"
+.venv/bin/mkdocs serve
+```
+
 ## Development
 
 ```bash
 uv venv .venv
-uv pip install --python .venv/bin/python -e ".[dev]"
+uv pip install --python .venv/bin/python -e ".[dev,docs]"
 .venv/bin/pytest
 .venv/bin/ruff check src tests
+.venv/bin/mkdocs build --strict
 ```

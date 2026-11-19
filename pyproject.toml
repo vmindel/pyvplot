@@ -75,6 +75,20 @@ dev = [
     "plotnine>=0.13",
     "scipy>=1.11",
 ]
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.26",
+    "numba>=0.58",
+    "pysam>=0.22",
+    "pyarrow>=14.0",
+    "matplotlib>=3.7",
+    "plotnine>=0.13",
+    "scipy>=1.11",
+]
+
+[project.scripts]
+pyvplot-install-skills = "pyvplot._skills.install:main"
 
 [project.urls]
 Homepage = "https://github.com/vmindel/pyvplot"

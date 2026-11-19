@@ -1,0 +1,80 @@
+site_name: pyvplot
+site_description: Fast, assay-aware Python toolkit for paired-end fragment geometry, V-plots, cleavage cut-site footprints, and nucleosome phasing
+site_url: https://vmindel.github.io/pyvplot/
+repo_url: https://github.com/vmindel/pyvplot
+repo_name: vmindel/pyvplot
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Tutorials:
+      - Quick start: tutorials/quickstart.md
+      - V-plots & differential V-plots: tutorials/vplots-and-diff.md
+      - Matrices & cut-site footprints: tutorials/matrices-and-footprints.md
+      - Fragment QC & nucleosome phasing: tutorials/qc-and-phasing.md
+      - Cleavage bias & track export: tutorials/bias-and-export.md
+  - Claude Code skill: claude-skill.md
+  - API reference:
+      - Assays: api/assays.md
+      - FragmentStore: api/store.md
+      - Extraction engine: api/extract.md
+      - V-plots: api/vplot.md
+      - Matrices & footprints: api/matrices.md
+      - QC & nucleosome phasing: api/qc.md
+      - Cleavage bias: api/bias.md
+      - Track export: api/export.md
+      - Plotting: api/plotting.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: numpy
+            show_root_heading: true
+            show_source: false
+            show_signature_annotations: true
+            separate_signature: true
+            members_order: source
+            merge_init_into_class: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+exclude_docs: |
+  run_docs.py
