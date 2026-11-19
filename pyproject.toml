@@ -92,6 +92,7 @@ pyvplot-install-skills = "pyvplot._skills.install:main"
 
 [project.urls]
 Homepage = "https://github.com/vmindel/pyvplot"
+Documentation = "https://vmindel.github.io/pyvplot/"
 Repository = "https://github.com/vmindel/pyvplot"
 
 [tool.hatch.build.targets.wheel]

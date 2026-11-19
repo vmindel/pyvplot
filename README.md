@@ -1,5 +1,10 @@
 # pyvplot
 
+[![tests](https://github.com/vmindel/pyvplot/actions/workflows/tests.yml/badge.svg)](https://github.com/vmindel/pyvplot/actions/workflows/tests.yml)
+[![docs](https://img.shields.io/badge/docs-vmindel.github.io%2Fpyvplot-teal)](https://vmindel.github.io/pyvplot/)
+
+**Documentation:** <https://vmindel.github.io/pyvplot/>
+
 Fast, assay-aware Python toolkit for **paired-end fragment geometry, V-plots, 1-bp cleavage cut-site footprints, size-stratified signal matrices, and nucleosome phasing** tailored to **ChEC-seq, ATAC-seq, CUT&RUN / CUT&Tag, MNase-seq, and ChIP-exo**.
 
 ![WT ChEC-seq V-plot and Mutant vs. WT Differential V-plot](docs/img/vplot_hero.png)
@@ -135,7 +140,9 @@ Use `--dest .claude/skills/pyvplot` for project-local installation or `--force` 
 
 ## Documentation
 
-Full tutorials, API reference, and skill documentation are built with MkDocs Material:
+Full tutorials, API reference, and Claude skill guide are hosted at **<https://vmindel.github.io/pyvplot/>**.
+
+To preview the MkDocs Material site locally:
 
 ```bash
 uv pip install --python .venv/bin/python -e ".[dev,docs]"
