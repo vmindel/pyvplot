@@ -27,7 +27,7 @@ project from the next session on.
 Once it's installed, ask Claude Code for `pyvplot` tasks in plain language — for example:
 *"build a cached FragmentStore from this ChEC-seq BAM"*, *"compute a differential V-plot of
 mutant vs WT around these moodspy CTCF hits with expected-background normalization"*, or
-*"extract size-stratified TF and nucleosome matrices for EnrichedHeatmap and estimate the
+*"plot heatmaps of TF-sized and nucleosome-sized fragments around these motifs and estimate the
 nucleosome repeat length"*. It reads the skill automatically.
 
 ## What's inside
@@ -40,7 +40,7 @@ almost no context until it's used.
 |---|---|
 | `references/store-ingestion.md` | BAM (`read1`/`mate`), BED/`.frag.tsv.gz`/BEDPE, `.npz`/`.parquet` caches, dedup, filtering |
 | `references/vplots.md` | `vplot()`, CPM & expected/background normalization, smoothing, `diff()`, `VPlotCollection` |
-| `references/matrices-footprints.md` | `to_matrix()`, `EnrichedHeatmap` handoff, 1-bp `+`/`-` cut footprints, `footprint_score()` |
+| `references/matrices-footprints.md` | `to_matrix()`, per-anchor heatmaps, 1-bp `+`/`-` cut footprints, `footprint_score()` |
 | `references/assays-coordinates.md` | Assay presets, `+4/-5` Tn5 shift, 5'→3' strand flipping, ChIP-exo, asymmetric windows |
 | `references/qc-phasing.md` | Insert-size distribution, FRiP, nucleosome phasogram, NRL estimation, `qc_summary()` |
 | `references/bias-export.md` | `KmerBiasTable` bias modeling/correction, control normalization, bedGraph / BigWig / `pymisha` |

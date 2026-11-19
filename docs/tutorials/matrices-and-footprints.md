@@ -47,7 +47,26 @@ SignalMatrix(shape=(2, 20), window=[-100, +100) bp, bin_size=10, feature='midpoi
 
 Rows follow the input order and labels (`region_index`). `mat.values` is a plain NumPy array. `mat.mean_profile(ci=0.95)` gives the average profile with a normal-approximation interval. `mat.subset(idx)` selects rows, for example after sorting by a score. `mat.to_dataframe()` gives a long table (anchor, pos, value) for ggplot2.
 
-For heatmap tools, `mat.to_dict()` returns `values`, `region_index`, `upstream`, `downstream` and `bin_size`. `mat.to_enriched_heatmap()` returns a `NormalizedMatrix` if a Python package exposing `NormalizedMatrix.from_array` is importable, and that same dict otherwise. No such package was found on PyPI when this was written, so treat the dict as the interface.
+### Heatmaps
+
+`mat.plot()` draws one heatmap row per anchor, with the mean profile and a 95% band on top. By default the rows are ordered strongest first (`order="mean"`). The colour scale runs from 0 to the 99th percentile, so a few very deep anchors don't wash out the rest. Matrices with negative values, such as `row_zscore` or log ratios, switch to a diverging scale centred on 0.
+
+```py
+fig, (ax_profile, ax_heatmap) = mat.normalize("cpm").plot()
+
+# Any row order, or a subset of rows, as positions: here strongest footprint first,
+# using `scores` from footprint_score() further down this page.
+order = np.argsort(-scores["protection_score"].to_numpy())
+mat.plot(order=order, title="Sorted by protection score")
+
+mat.plot_plotnine()     # same heatmap as a ggplot object (geom_raster); slow beyond ~1e6 cells
+```
+
+Below, 300 simulated sites (100 strongly bound, 100 weakly bound, 100 unbound) sorted by mean:
+
+![Per-anchor heatmap of TF-sized fragment midpoints with mean profile](../img/signal_heatmap.png)
+
+For other tools, `mat.to_dict()` returns `values`, `region_index`, `upstream`, `downstream` and `bin_size` as NumPy arrays and plain Python values.
 
 ## Base-resolution cut-site footprints
 

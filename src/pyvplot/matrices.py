@@ -23,11 +23,12 @@ def _resolve_len_range(
 
 @dataclass(repr=False)
 class SignalMatrix:
-    """Per-anchor binned signal matrix ready for heatmaps and ``EnrichedHeatmap``.
+    """Per-anchor binned signal matrix: one row per anchor, one column per position bin.
 
     Implements duck-typed mapping access (``mat["values"]``, ``mat["upstream"]``,
     etc.) and ``__array__`` so it can be passed directly into downstream tools
-    or converted via [`to_enriched_heatmap`][pyvplot.SignalMatrix.to_enriched_heatmap].
+    or exported with [`to_dict`][pyvplot.SignalMatrix.to_dict]. Plot with
+    [`plot`][pyvplot.SignalMatrix.plot] or [`plot_plotnine`][pyvplot.SignalMatrix.plot_plotnine].
 
     Attributes
     ----------
@@ -109,7 +110,11 @@ class SignalMatrix:
         raise KeyError(key)
 
     def to_dict(self) -> dict[str, Any]:
-        """Return lightweight dict accepted by ``EnrichedHeatmap`` or custom pipelines."""
+        """Return a plain dict (``values``, ``region_index``, ``upstream``, ``downstream``, ``bin_size``).
+
+        Uses only NumPy and built-in types, so any other tool can consume it
+        without pyvplot installed.
+        """
         return {
             "values": self.values,
             "region_index": self.region_index,
@@ -118,49 +123,24 @@ class SignalMatrix:
             "bin_size": self.bin_size,
         }
 
-    def to_enriched_heatmap(
-        self,
-        name: str | None = None,
-        strict: bool = False,
-    ) -> Any:
-        """Convert to ``EnrichedHeatmap``'s ``NormalizedMatrix`` if installed.
+    def plot(self, **kwargs: Any) -> Any:
+        """Heatmap (one row per anchor) with the mean profile on top, via ``matplotlib``.
 
-        Falls back to [`to_dict`][pyvplot.SignalMatrix.to_dict] when ``EnrichedHeatmap`` is not installed
-        unless ``strict=True`` is specified.
+        See [`plot_signal_matrix_matplotlib`][pyvplot.plotting.plot_signal_matrix_matplotlib].
+        Returns ``(fig, (ax_profile, ax_heatmap))``.
         """
-        nm_cls = None
-        for mod_name in ("enrichedheatmap", "EnrichedHeatmap", "pyenrichedheatmap"):
-            try:
-                mod = __import__(mod_name, fromlist=["NormalizedMatrix"])
-                nm_cls = getattr(mod, "NormalizedMatrix", None)
-                if nm_cls is not None:
-                    break
-            except ImportError:
-                continue
+        from pyvplot.plotting import plot_signal_matrix_matplotlib
 
-        if nm_cls is not None and hasattr(nm_cls, "from_array"):
-            kwargs: dict[str, Any] = {
-                "values": self.values,
-                "upstream": self.upstream,
-                "downstream": self.downstream,
-                "bin_size": self.bin_size,
-                "region_index": self.region_index,
-            }
-            if name is not None:
-                kwargs["name"] = name
-            try:
-                return nm_cls.from_array(**kwargs)
-            except TypeError:
-                kwargs.pop("name", None)
-                kwargs.pop("region_index", None)
-                return nm_cls.from_array(**kwargs)
+        return plot_signal_matrix_matplotlib(self, **kwargs)
 
-        if strict:
-            raise ImportError(
-                "Could not import `NormalizedMatrix` from `EnrichedHeatmap` / `enrichedheatmap`. "
-                "Use `.to_dict()` for duck-typed access."
-            )
-        return self.to_dict()
+    def plot_plotnine(self, **kwargs: Any) -> Any:
+        """Heatmap (one row per anchor) as a ``plotnine`` ``ggplot``.
+
+        See [`plot_signal_matrix_plotnine`][pyvplot.plotting.plot_signal_matrix_plotnine].
+        """
+        from pyvplot.plotting import plot_signal_matrix_plotnine
+
+        return plot_signal_matrix_plotnine(self, **kwargs)
 
     def normalize(self, method: str = "cpm") -> SignalMatrix:
         """Return a normalized copy of this signal matrix.

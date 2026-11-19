@@ -1,11 +1,11 @@
 ---
 name: pyvplot
-description: Fast, assay-aware Python toolkit for paired-end fragment geometry, V-plots, differential V-plots, 1-bp cleavage cut-site footprints, size-stratified EnrichedHeatmap matrices, nucleosome phasograms/NRL, k-mer bias correction, and bedGraph/BigWig/pymisha track export for ChEC-seq, ATAC-seq, CUT&RUN, CUT&Tag, MNase-seq, and ChIP-exo.
+description: Fast, assay-aware Python toolkit for paired-end fragment geometry, V-plots, differential V-plots, 1-bp cleavage cut-site footprints, size-stratified per-anchor matrices and heatmaps, nucleosome phasograms/NRL, k-mer bias correction, and bedGraph/BigWig/pymisha track export for ChEC-seq, ATAC-seq, CUT&RUN, CUT&Tag, MNase-seq, and ChIP-exo.
 ---
 
 # pyvplot
 
-Use this skill whenever the user analyzes paired-end chromatin fragments, builds V-plots or differential V-plots, computes 1-bp cut-site footprints or TF protection scores, extracts size-stratified matrices for `EnrichedHeatmap`, estimates nucleosome repeat length (NRL), or normalizes cleavage sequence bias with `pyvplot`.
+Use this skill whenever the user analyzes paired-end chromatin fragments, builds V-plots or differential V-plots, computes 1-bp cut-site footprints or TF protection scores, extracts and plots size-stratified per-anchor matrices, estimates nucleosome repeat length (NRL), or normalizes cleavage sequence bias with `pyvplot`.
 
 ## Router
 
@@ -15,7 +15,7 @@ Read only the topic reference file needed for the task:
 |---|---|
 | **Ingesting BAM / BED / `.frag.tsv.gz` / BEDPE**, caching `.npz`/`.parquet`, deduplication, filtering, merging | `references/store-ingestion.md` |
 | **V-plots & differential V-plots**, CPM / expected background normalization, 2D smoothing, `plotnine` / `matplotlib`, faceted `VPlotCollection` | `references/vplots.md` |
-| **Size-stratified matrices**, `EnrichedHeatmap` handoff, 1-bp cut-site footprints (`+`/`-`), motif `footprint_score` | `references/matrices-footprints.md` |
+| **Size-stratified matrices**, per-anchor heatmaps (`mat.plot()`), 1-bp cut-site footprints (`+`/`-`), motif `footprint_score` | `references/matrices-footprints.md` |
 | **Assay presets & coordinate geometry**, Tn5 `+4/-5` shift, 5'->3' strand flipping, ChIP-exo, asymmetric windows, anchor tables | `references/assays-coordinates.md` |
 | **Fragment QC & nucleosome phasing**: insert-size histograms, FRiP, phasograms, NRL (peak fit + FFT), `qc_summary` | `references/qc-phasing.md` |
 | **K-mer cleavage bias correction**, naked-DNA control normalization, exporting `bedGraph` / `BigWig` / `pymisha` tracks | `references/bias-export.md` |

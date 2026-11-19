@@ -67,7 +67,7 @@ def test_bam_to_vplot_script(tmp_path):
     mod.main(["--bam", str(bam), "--motifs", str(bed), "--out", str(out)])
 
     for suffix in (".frags.npz", ".qc.json", ".vplot.png", ".vplot.tsv.gz", ".footprint.png",
-                   ".footprint.tsv.gz", ".scores.tsv"):
+                   ".footprint.tsv.gz", ".scores.tsv", ".heatmap.png"):
         assert Path(str(out) + suffix).exists(), suffix
 
     qc = json.loads(Path(str(out) + ".qc.json").read_text())

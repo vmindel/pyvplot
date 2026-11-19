@@ -21,7 +21,7 @@ plot · tidy DataFrame for ggplot2/plotnine · bedGraph / BigWig / misha track
 | :--- | :--- | :--- |
 | Where, relative to my motifs, do fragments of each length sit? | `store.vplot(anchors, ...)` | [`VPlot`](api/vplot.md): 2D counts, length × position |
 | Did that change between conditions? | `v_mut.diff(v_wt)` | `VPlot` with `is_diff=True` |
-| Per-motif signal for a heatmap, from one size class | `store.to_matrix(anchors, len_range="tf")` | [`SignalMatrix`](api/matrices.md): anchors × bins |
+| Per-motif signal from one size class, as a heatmap | `store.to_matrix(anchors, len_range="tf").plot()` | [`SignalMatrix`](api/matrices.md): anchors × bins |
 | Base-resolution cleavage around a motif, by strand | `store.cut_site_footprint(anchors)` | [`CutSiteFootprint`](api/matrices.md) |
 | One protection number per motif | `store.footprint_score(anchors)` | DataFrame indexed by anchor |
 | Every fragment near every anchor, for custom analysis | `store.extract_events(anchors)` | DataFrame, one row per fragment |

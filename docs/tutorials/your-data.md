@@ -59,6 +59,7 @@ fp.to_dataframe().to_csv("footprint.tsv.gz", sep="\t", index=False) # pos, stran
 
 scores = store.footprint_score("motifs.bed", len_range="tf")         # one row per motif
 mat = store.to_matrix("motifs.bed", flank=1000, bin_size=10, feature="midpoint", len_range="tf")
+mat.normalize("cpm").plot()                                          # heatmap, one row per motif
 
 sizes = dict(line.split()[:2] for line in open("genome.chrom.sizes"))
 sizes = {c: int(n) for c, n in sizes.items()}
@@ -103,6 +104,7 @@ Outputs (all prefixed by --out):
     .vplot.tsv.gz          tidy V-plot (pos, length, value) for ggplot2
     .footprint.png         strand-separated 1-bp cut profile
     .footprint.tsv.gz      tidy cut profile (pos, strand, signal)
+    .heatmap.png           one row per motif, short-fragment midpoints, strongest first
     .scores.tsv            per-motif protection scores
 """
 
@@ -194,6 +196,11 @@ def main(argv: list[str] | None = None) -> None:
 
     scores = store.footprint_score(args.motifs, len_range=short)
     scores.to_csv(prefix + ".scores.tsv", sep="\t", index_label="motif")
+
+    mat = store.to_matrix(args.motifs, flank=500, bin_size=10, feature="midpoint", len_range=short)
+    fig, _ = mat.normalize("cpm").plot(title=f"Midpoints, {short or 'all'} fragments")
+    fig.savefig(prefix + ".heatmap.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
     print(f"Wrote {prefix}.*")
 
 
