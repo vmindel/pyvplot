@@ -112,7 +112,7 @@ The combined `cuts` profile shows a dip between two edge peaks either way. The s
 | `"full"` | contain the whole motif |
 | `"none"` | do not overlap the motif |
 
-The motif interval is the BED `start`/`end`, or the `start`/`end` columns of a DataFrame (kept even when a `center` column sets the window centre). Anchors given only as a centre use the 1-bp interval `[center - 0.5, center + 0.5)`. `"any"` and `"none"` partition the fragments, so their counts add up to the unfiltered result.
+The motif interval is the BED `start`/`end`, or the `start`/`end` columns of a DataFrame (kept even when a `center` column sets the window centre). Anchors given only as a centre use the 1-bp interval `[center - 0.5, center + 0.5)`. An integer centre is a boundary between two bases, so there `"any"` keeps fragments that touch either base next to it; give `start`/`end` when the motif bounds matter. `"any"` and `"none"` partition the fragments, so their counts add up to the unfiltered result.
 
 Restricting to overlapping fragments confines the signal to the region within half a fragment length of the motif, by construction. Normalise such V-plots with `"cpm"`, not `"expected"` (whose flank background is then depleted; pyvplot warns), and do not feed them to `footprint_score`, whose centre-versus-shoulder contrast becomes circular. `VPlot.diff` refuses to compare V-plots built with different `feature` or `motif_overlap`.
 

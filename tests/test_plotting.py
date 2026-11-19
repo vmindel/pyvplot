@@ -121,3 +121,25 @@ def test_signal_matrix_heatmaps():
 
     with pytest.raises(ValueError, match="order"):
         mat.plot(order="median")
+
+
+def test_proximity_footprint_and_filtered_vplot_render():
+    import pyvplot as vp
+
+    store, anchors = vp.datasets.simulate_chec(n_sites=20, seed=0)
+    motifs = anchors.assign(start=anchors["center"] - 5, end=anchors["center"] + 5)
+    fp = store.cut_site_footprint(motifs, flank=60, len_range="tf", split_by="proximity", motif_overlap="any")
+
+    fig, ax = fp.plot()
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["Proximal cuts", "Distal cuts"]
+    fig.canvas.draw()
+    plt.close(fig)
+
+    p = fp.plot_plotnine()
+    assert p.mapping["color"] == "end"
+    plt.close(p.draw())
+
+    v = store.vplot(motifs, flank=150, pos_bin=5, len_bin=5, feature="cuts_proximal", motif_overlap="any")
+    fig, _ = v.normalize("cpm").plot()
+    fig.canvas.draw()
+    plt.close(fig)

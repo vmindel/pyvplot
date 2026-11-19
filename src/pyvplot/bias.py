@@ -440,6 +440,7 @@ class KmerBiasTable:
             assay=signal_matrix.assay,
             normalization=f"{signal_matrix.normalization}+kmer_bias",
             metadata={**signal_matrix.metadata, "bias_k": self.k},
+            motif_overlap=signal_matrix.motif_overlap,
         )
 
 
@@ -473,6 +474,11 @@ def normalize_by_control(
     if isinstance(signal, SignalMatrix) and isinstance(control, SignalMatrix):
         if signal.shape != control.shape:
             raise ValueError(f"Shape mismatch: {signal.shape} vs {control.shape}.")
+        if signal.feature != control.feature or signal.motif_overlap != control.motif_overlap:
+            raise ValueError(
+                f"Signal and control were built differently: feature {signal.feature!r} vs "
+                f"{control.feature!r}, motif_overlap {signal.motif_overlap!r} vs {control.motif_overlap!r}."
+            )
         a, b = signal.values, control.values
         if m == "ratio":
             vals = (a + pseudocount) / (b + pseudocount)
@@ -492,6 +498,7 @@ def normalize_by_control(
             assay=signal.assay,
             normalization=f"control_{m}",
             metadata=dict(signal.metadata),
+            motif_overlap=signal.motif_overlap,
         )
 
     a = np.asarray(signal, dtype=np.float64)

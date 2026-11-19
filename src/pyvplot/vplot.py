@@ -598,7 +598,9 @@ def vplot(
         least 1 bp (``"any"``), contain all of it (``"full"``), or miss it
         (``"none"``). ``None`` (default) applies no filter. The interval is
         the BED start/end (or ``start``/``end`` columns); point anchors use
-        ``[center - 0.5, center + 0.5)``. Filtering to overlapping fragments
+        ``[center - 0.5, center + 0.5)``, so for an integer centre (a boundary
+        between two bases) ``"any"`` keeps fragments touching either flanking
+        base. Give ``start``/``end`` for exact motif bounds. Filtering to overlapping fragments
         empties the flanks by construction: normalise with ``"cpm"``, not
         ``"expected"``.
     use_numba:
