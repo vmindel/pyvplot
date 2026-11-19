@@ -15,7 +15,8 @@ vp_wt = vp.vplot(
     max_len=250,            # half-open [min_len, max_len)
     pos_bin=1,
     len_bin=1,
-    feature="midpoint",     # "midpoint" (default), "cuts", "cuts_plus", "cuts_minus"
+    feature="midpoint",     # "midpoint" (default), "cuts", "cuts_plus", "cuts_minus", "cuts_proximal", "cuts_distal"
+    motif_overlap=None,     # None, "any" (>= 1 bp overlap with the motif interval), "full" (contains it), "none"
 )
 
 vp_cpm = vp_wt.normalize("cpm")

@@ -19,6 +19,7 @@ Customize or register presets with `vp.get_assay("atac").with_overrides(...)` an
 Every extraction function accepts a `pandas.DataFrame`, `dict`, list of records, or path to a `.bed` / `.bed.gz` file:
 - **Chromosome column:** `chrom`, `chr`, `seqnames`, or `chromosome`.
 - **Center column:** `center`, `pos`, `midpoint`, or `summit`; alternatively `start` and `end` (uses exact midpoint `0.5 * (start + end)`).
+- **Motif interval:** `start`/`end` (or BED columns 2-3) are kept as the motif interval for `motif_overlap=` even when a center column is given; without them each anchor is `[center - 0.5, center + 0.5)`.
 - **Strand column (optional):** `strand`, `orientation`, or `dir`. `"-"` or `-1` triggers 5'->3' strand flipping; `"+"`, `"."`, `1`, or missing defaults to `+1`.
 - **Anchor IDs:** `DataFrame.index` is preserved as `region_index`; for BED input, column 4 (name) becomes the index.
 - **Chromosome names must match the store.** Anchors on chromosomes the store lacks produce a `UserWarning` and all-zero rows.
@@ -44,5 +45,8 @@ mat = vp.to_matrix(frags, tss_anchors, upstream=1000, downstream=500, bin_size=1
 
 # Compact per-fragment event table for custom analysis
 events = vp.extract_events(frags, anchors, flank=200, len_range=(20, 120), overlap_mode="midpoint")  # or len_range="tf"
-# Columns: anchor_idx, rel_mid, rel_left, rel_right, frag_len (plus frag_strand for chip_exo)
+# Columns: anchor_idx, rel_mid, rel_left, rel_right, frag_len, then either
+#   rel_proximal, rel_distal, motif_overlap ('full'/'partial'/'none')   (paired-end stores), or
+#   frag_strand                                                         (stranded stores, chip_exo)
+near = vp.extract_events(frags, motifs, flank=200, len_range="tf", motif_overlap="any")  # filter on the motif interval
 ```

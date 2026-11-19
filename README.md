@@ -32,6 +32,8 @@ v.normalize("expected").plot()          # each length row relative to its flank 
 
 # Short-fragment cut sites at 1 bp, split by fragment end, and one score per motif.
 fp = store.cut_site_footprint("motifs.bed", flank=100, len_range="tf")
+# Near vs far cut of each fragment, keeping only fragments that overlap the BED motif interval.
+fp_nf = store.cut_site_footprint("motifs.bed", flank=100, len_range="tf", split_by="proximity", motif_overlap="any")
 scores = store.footprint_score("motifs.bed", len_range="tf")
 
 # One heatmap row per motif, strongest first, with the mean profile on top.

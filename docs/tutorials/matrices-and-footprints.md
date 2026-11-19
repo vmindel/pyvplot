@@ -81,7 +81,7 @@ print("cuts within 10 bp of the centre:", fp.combined[np.abs(fp.pos) < 10].sum()
 ```
 
 ```text
-CutSiteFootprint(pos=[-39.5, 39.5] bp, n_bins=80, n_anchors=1, split_strands=True, agg='sum', has_matrices=True)
+CutSiteFootprint(pos=[-39.5, 39.5] bp, n_bins=80, n_anchors=1, split_by='strand', agg='sum', has_matrices=True)
 plus ends span -24.5 to -11.5 bp
 minus ends span 12.5 to 25.5 bp
 cuts within 10 bp of the centre: 0.0
@@ -90,6 +90,46 @@ cuts within 10 bp of the centre: 0.0
 `fp.plot()` draws both strands; `fp.to_dataframe()` gives a long table (pos, strand, signal). The figure below shows a strand-split footprint next to TF-sized and nucleosome-sized midpoint profiles (`mean_profile(ci=0.95)` of two matrices with different `len_range`):
 
 ![1-bp strand-separated cleavage cut-site footprint and size-stratified midpoint profiles](../img/cut_site_footprint.png)
+
+## Proximal and distal cuts at motif-overlapping fragments
+
+`split_by="proximity"` splits each fragment's two ends by distance to the anchor centre (`proximal`, `distal`) instead of by orientation. `motif_overlap="any"` keeps only fragments that overlap the motif interval, here the 10 bp around each simulated site. Pass `start`/`end` columns (or a BED file) to give the motif its width.
+
+```python
+store, sites = vp.datasets.simulate_chec()
+motifs = sites.assign(start=sites["center"] - 5, end=sites["center"] + 5)
+
+fp = store.cut_site_footprint(motifs, flank=80, len_range="tf", split_by="proximity", motif_overlap="any")
+print(fp)
+for end in ("proximal", "distal"):
+    sig = getattr(fp, end)
+    print(f"{end}: mean distance {np.sum(np.abs(fp.pos) * sig) / sig.sum():.1f} bp")
+```
+
+```text
+CutSiteFootprint(pos=[-79.5, 79.5] bp, n_bins=160, n_anchors=50, split_by='proximity', motif_overlap='any', agg='mean', has_matrices=True)
+proximal: mean distance 26.5 bp
+distal: mean distance 35.2 bp
+```
+
+The simulated TF fragments are 45–80 bp and centred on the site with 5 bp jitter, so the near end sits about half a fragment length minus the offset from the centre, and the far end the same plus the offset. `fp.plot()` draws the two ends; `fp.to_dataframe()` has an `end` column instead of `strand`.
+
+For per-fragment analysis, `extract_events` returns `rel_proximal` and `rel_distal` alongside `rel_left`/`rel_right`, and labels each fragment by its overlap with the motif:
+
+```python
+ev = store.extract_events(motifs, flank=200, len_range="tf")
+print(ev.groupby("motif_overlap", observed=True)[["rel_proximal", "rel_distal"]].agg(lambda x: x.abs().median()))
+```
+
+```text
+               rel_proximal  rel_distal
+motif_overlap
+full                   27.0        35.0
+partial                 2.0        64.0
+none                   80.0       152.0
+```
+
+The same two arguments work on `to_matrix` (`feature="cuts_proximal"`) and on `vplot`. A V-plot restricted to overlapping fragments has empty flanks by construction, so normalise it with `"cpm"` rather than `"expected"`.
 
 ## Per-anchor protection scores
 

@@ -372,14 +372,18 @@ def plot_cut_footprint_matplotlib(
     title: str | None = None,
     figsize: tuple[float, float] = (7.0, 3.8),
 ) -> tuple[Any, Any]:
-    """Plot 1-bp cleavage cut-site footprint (strand-separated or combined) with ``matplotlib``."""
+    """Plot 1-bp cleavage cut-site footprint (split by end, or combined) with ``matplotlib``."""
     plt = _require_matplotlib()
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
     else:
         fig = ax.figure
 
-    if footprint.plus is not None and footprint.minus is not None:
+    if footprint.proximal is not None and footprint.distal is not None:
+        ax.plot(footprint.pos, footprint.proximal, color="#1b7837", linewidth=1.2, label="Proximal cuts")
+        ax.plot(footprint.pos, footprint.distal, color="#762a83", linewidth=1.2, label="Distal cuts")
+        ax.legend(frameon=False, fontsize=8)
+    elif footprint.plus is not None and footprint.minus is not None:
         ax.plot(footprint.pos, footprint.plus, color="#d73027", linewidth=1.2, label="+ strand cuts")
         ax.plot(footprint.pos, footprint.minus, color="#4575b4", linewidth=1.2, label="- strand cuts")
         ax.legend(frameon=False, fontsize=8)
@@ -401,7 +405,7 @@ def plot_cut_footprint_plotnine(
     p9 = _require_plotnine()
     df = footprint.to_dataframe()
     p = (
-        p9.ggplot(df, p9.aes(x="pos", y="signal", color="strand"))
+        p9.ggplot(df, p9.aes(x="pos", y="signal", color="end" if "end" in df.columns else "strand"))
         + p9.geom_line(size=0.8)
         + p9.geom_vline(xintercept=0, linetype="dashed", color="#666666", alpha=0.6)
         + p9.labs(

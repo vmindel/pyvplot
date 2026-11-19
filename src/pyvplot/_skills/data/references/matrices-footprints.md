@@ -52,7 +52,16 @@ fp = vp.cut_site_footprint(
 df = fp.to_dataframe()      # columns: pos, strand, signal
 fig, ax = fp.plot()
 p = fp.plot_plotnine()
+
+# Near vs far end, only fragments overlapping the motif (give anchors start/end for the motif width)
+motifs = anchors.assign(start=anchors["center"] - 5, end=anchors["center"] + 5)
+fp_nf = vp.cut_site_footprint(frags, motifs, flank=100, len_range="tf",
+                              split_by="proximity", motif_overlap="any")
+fp_nf.proximal, fp_nf.distal, fp_nf.matrix_proximal   # to_dataframe() columns: pos, end, signal
+mat_near = frags.to_matrix(motifs, flank=100, bin_size=1, feature="cuts_proximal", motif_overlap="full")
 ```
+
+`split_by="proximity"` needs an unstranded store. `cuts_proximal + cuts_distal == cuts` for any `motif_overlap`.
 
 ## Per-Anchor Motif Footprint & Protection Scores
 
