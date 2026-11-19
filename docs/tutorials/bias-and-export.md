@@ -1,8 +1,17 @@
-# Cleavage bias & track export
+# Cleavage bias and track export
 
-## Modeling & correcting k-mer cleavage bias
+## K-mer cleavage bias
 
-Enzymes like MNase and Tn5 exhibit intrinsic DNA sequence cleavage preferences. [`KmerBiasTable`](../api/bias.md) learns empirical k-mer propensities directly from a naked-DNA control `FragmentStore` (or loads a precomputed table) and normalizes 1-bp cut-site matrices.
+MNase and Tn5 both cut some sequences more readily than others, which can imprint motif-shaped patterns on 1-bp cut profiles. [`KmerBiasTable`](../api/bias.md) estimates relative cut propensity per k-mer from a naked-DNA control store, scaled to mean 1. It can also load a precomputed table (`from_table`, `from_dict`). It can then divide that expectation out of a 1-bp cut matrix.
+
+With real data, pass the genome FASTA directly. Chromosome names must match the store's, and an error is raised if none do:
+
+```py
+naked = vp.FragmentStore.load("naked_dna.frags.npz")
+bias = vp.KmerBiasTable.from_cuts(naked, "genome.fa", k=6)   # FASTA path (plain or gzipped), pysam.FastaFile, or {chrom: seq}
+```
+
+`k=6` has 4,096 k-mers, so it needs millions of control cuts; use `k=4` for shallow controls. The example below uses a toy genome with a planted GATC preference.
 
 ```python
 import numpy as np
@@ -34,7 +43,7 @@ print(f"Learned bias at GATC: {bias['GATC']:.2f}x (mean across 4-mers: {bias.wei
 Learned bias at GATC: 54.28x (mean across 4-mers: 1.00x)
 ```
 
-Correct a 1-bp cut-site matrix using anchor sequences:
+`correct_matrix` needs one sequence per anchor, oriented 5'→3' along the anchor (reverse-complemented for `-` anchors, or pass `strands=`). Each sequence must be either exactly `n_bins` long, or padded by `cut_offset` bases on the left and `k - 1 - cut_offset` on the right so edge cuts get a full k-mer. You extract these from the genome yourself; pyvplot does not yet do it for you. This toy example checks that correcting a profile equal to its own expectation flattens it:
 
 ```python
 anchor_seq = "AAAAAAAA" + "GATC" + "AAAAAAAA"
@@ -59,9 +68,9 @@ Applying `KmerBiasTable.correct_matrix()` around a protected motif removes stron
 
 ![Cut-site profile before and after KmerBiasTable cleavage bias correction](../img/bias_correction.png)
 
-## Exporting size-stratified tracks
+## Genome-wide tracks of one size class
 
-Export binned midpoint, cleavage-cut, or exact average-coverage tracks to a DataFrame, `bedGraph` / `.bedGraph.gz`, `BigWig` (`pyBigWig`), or `pymisha` (sparse/dense):
+`to_binned_track` bins one feature of one size class genome-wide and returns the non-empty bins as a DataFrame. `to_bedgraph`, `to_bigwig` and `to_pymisha` write the same values. Values are CPM by default (`normalize="cpm"`, over all fragments in the store); `"rpkm"` also divides by bin width in kb, and `None` keeps raw counts. With `feature="coverage"`, each bin gets the covered fraction of its width from each fragment.
 
 ```python
 track_df = vp.to_binned_track(naked_dna, feature="midpoint", len_range="tf", bin_size=100, normalize="cpm")
@@ -73,9 +82,11 @@ print("Exported bins:", len(track_df), "file:", bg_path.name)
 Exported bins: 98 file: tf_midpoints.bedGraph.gz
 ```
 
-For BigWig or `pymisha`:
+For BigWig or misha:
 
 ```py
-vp.to_bigwig(frags, "tf_midpoints.bw", chrom_sizes={"chr1": 248_956_422}, feature="midpoint", len_range="tf")
-vp.to_pymisha(frags, "chec.tf_cuts", feature="cuts", len_range="tf", bin_size=10, mode="sparse")
+vp.to_bigwig(store, "tf_midpoints.bw", chrom_sizes={"chr1": 248_956_422}, feature="midpoint", len_range="tf")
+vp.to_pymisha(store, "chec.tf_cuts", feature="cuts", len_range="tf", bin_size=10, mode="sparse")
 ```
+
+`to_pymisha` calls `pymisha.gtrack_create_sparse(track, description, intervals, values)` or `gtrack_create_dense(..., binsize=, defval=)` on the database you have already initialised. These signatures were checked against pymisha 0.20.1, but the export has not been run against a live misha database in pyvplot's tests.

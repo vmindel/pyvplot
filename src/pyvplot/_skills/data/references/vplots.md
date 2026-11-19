@@ -41,7 +41,7 @@ vp_sm = vp_oe.smooth(sigma=(1.5, 1.5))
 vp_diff = vp_mut.diff(
     vp_wt,
     mode="log2fc",          # "log2fc", "subtract", "ratio", "zscore"
-    pseudocount=0.5,
+    pseudocount=None,       # default: half a raw count per cell, shared by both samples (depth-invariant; empty-in-both cells = 0)
     smooth_sigma=(1.5, 1.5),
     normalize_first="cpm",  # auto-normalizes raw VPlots to CPM before differencing
     smooth_before=True,
@@ -53,7 +53,7 @@ vp_diff = vp_mut.diff(
 ## Marginals, Tidy Export & Faceted `VPlotCollection`
 
 ```python
-tf_profile = vp_wt.marginal_position(len_range=(30, 120))
+tf_profile = vp_wt.marginal_position(len_range=(30, 120))   # or len_range="tf"
 center_lens = vp_wt.marginal_length(pos_range=(-30, 30))
 
 coll = (
@@ -70,4 +70,7 @@ p = coll.plot_plotnine(facet="tf ~ condition", cmap="magma")
 - **Nucleosomes drowning out TF V-signatures:** Raw or CPM V-plots are dominated by abundant ~150 bp nucleosome rows. Always inspect `.normalize("expected", expected_from="flank")` or `"log2_oe"` when looking for 40–100 bp TF footprints alongside nucleosomes.
 - **Half-open length bins:** `min_len=20, max_len=250, len_bin=1` creates 230 uniform bins `[20, 21), ..., [249, 250)`. A fragment of exact length `250` is excluded; pass `max_len=251` if you want length `250` included.
 - **Divisibility:** `upstream + downstream` must be divisible by `pos_bin`, and `max_len - min_len` must be divisible by `len_bin`.
+- **Fixed pseudocounts after CPM:** CPM-per-anchor cells on a 10M+ fragment library are ~0.1, so a fixed `pseudocount=0.5` flattens log2FC towards 0 (measured: -0.35 vs true -3.35 at 10M fragments). Leave `pseudocount=None` unless the inputs are `expected`/`density`-normalised, where the default falls back to 0.5 in those units; then set one deliberately (e.g. 0.1 for O/E).
+- **Empty flanks with `expected`:** rows with counts but no flank background are divided by `pseudocount=1e-6` and dominate the plot; pyvplot warns. Widen `flank`, coarsen `len_bin`, add anchors, or use `expected_from="genome"`.
+- **`diff` argument order:** `a.diff(b)` is `a` relative to `b`; pass the treatment first.
 - **Diffing pre-normalized V-plots:** `normalize_first="cpm"` only runs when **both** V-plots have `normalization == "raw"`. If you already normalized one V-plot, normalize the other with the same method before calling `.diff()`.

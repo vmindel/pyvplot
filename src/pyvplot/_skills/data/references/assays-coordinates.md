@@ -20,17 +20,19 @@ Every extraction function accepts a `pandas.DataFrame`, `dict`, list of records,
 - **Chromosome column:** `chrom`, `chr`, `seqnames`, or `chromosome`.
 - **Center column:** `center`, `pos`, `midpoint`, or `summit`; alternatively `start` and `end` (uses exact midpoint `0.5 * (start + end)`).
 - **Strand column (optional):** `strand`, `orientation`, or `dir`. `"-"` or `-1` triggers 5'->3' strand flipping; `"+"`, `"."`, `1`, or missing defaults to `+1`.
-- **Anchor IDs:** `DataFrame.index` is preserved as `region_index`.
+- **Anchor IDs:** `DataFrame.index` is preserved as `region_index`; for BED input, column 4 (name) becomes the index.
+- **Chromosome names must match the store.** Anchors on chromosomes the store lacks produce a `UserWarning` and all-zero rows.
+- Interpretation: fragments that *contain* a protected site put `cuts_plus` upstream and `cuts_minus` downstream of it; fragments that *abut* it do the reverse.
 
 ## Strand-Flipping Reflection Rule
 
 For an anchor at `center` with `strand == "-"`, coordinates are reflected by `x -> 2 * center - x`:
 - Fragment `[start, end)` maps to relative interval `[center - end, center - start)`.
 - `rel_midpoint = center - 0.5 * (start + end)`
-- `cuts_plus` (sense-strand 5' cut relative to anchor):
+- `cuts_plus` (the fragment end that is upstream in anchor orientation; for unstranded paired-end data this is not a read strand):
   - Paired-end: `start - center` on `+` anchors, `center - end` on `-` anchors.
   - Single-end (`chip_exo`): reads with `frag_strand * anchor_strand > 0`.
-- `cuts_minus` (antisense-strand 5' cut relative to anchor):
+- `cuts_minus` (the fragment end that is downstream in anchor orientation):
   - Paired-end: `end - center` on `+` anchors, `center - start` on `-` anchors.
   - Single-end (`chip_exo`): reads with `frag_strand * anchor_strand < 0`.
 
@@ -41,6 +43,6 @@ For an anchor at `center` with `strand == "-"`, coordinates are reflected by `x 
 mat = vp.to_matrix(frags, tss_anchors, upstream=1000, downstream=500, bin_size=10)
 
 # Compact per-fragment event table for custom analysis
-events = vp.extract_events(frags, anchors, flank=200, len_range=(20, 120), overlap_mode="midpoint")
+events = vp.extract_events(frags, anchors, flank=200, len_range=(20, 120), overlap_mode="midpoint")  # or len_range="tf"
 # Columns: anchor_idx, rel_mid, rel_left, rel_right, frag_len (plus frag_strand for chip_exo)
 ```

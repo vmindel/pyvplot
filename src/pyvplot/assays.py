@@ -199,7 +199,7 @@ _ASSAY_ALIASES: dict[str, str] = {
 
 
 def get_assay(assay: str | AssayConfig) -> AssayConfig:
-    """Resolve an assay name (or alias) or pass through an :class:`AssayConfig`."""
+    """Resolve an assay name (or alias) or pass through an [`AssayConfig`][pyvplot.AssayConfig]."""
     if isinstance(assay, AssayConfig):
         return assay
     if not isinstance(assay, str):
@@ -212,13 +212,42 @@ def get_assay(assay: str | AssayConfig) -> AssayConfig:
     return ASSAY_PRESETS[canonical]
 
 
+def resolve_len_range(
+    assay: str | AssayConfig,
+    len_range: tuple[int, int] | str | None,
+) -> tuple[int, int] | None:
+    """Turn a fragment-length filter into an inclusive ``(min_len, max_len)`` tuple.
+
+    ``len_range`` is either ``None`` (no filter), an explicit ``(min_len, max_len)``
+    tuple, or the name of one of the assay's size bins (``"tf"``, ``"nfr"``,
+    ``"mononucleosome"``, ...). Both bounds are inclusive.
+    """
+    if len_range is None:
+        return None
+    if isinstance(len_range, str):
+        cfg = get_assay(assay)
+        if len_range not in cfg.size_bins:
+            available = ", ".join(sorted(cfg.size_bins)) or "(none)"
+            raise ValueError(
+                f"Unknown size bin {len_range!r} for assay {cfg.name!r}. "
+                f"Available size bins: {available}. Or pass an explicit (min_len, max_len) tuple."
+            )
+        return cfg.size_bins[len_range]
+    if len(len_range) != 2:
+        raise ValueError(f"Expected (min_len, max_len) tuple, got {len_range!r}.")
+    lo, hi = int(len_range[0]), int(len_range[1])
+    if lo > hi:
+        raise ValueError(f"Invalid len_range {len_range!r}: min_len > max_len.")
+    return (lo, hi)
+
+
 def list_assays() -> list[str]:
     """Return sorted canonical names of all registered assay presets."""
     return sorted(ASSAY_PRESETS)
 
 
 def register_assay(config: AssayConfig, overwrite: bool = False) -> None:
-    """Register a custom :class:`AssayConfig` preset globally."""
+    """Register a custom [`AssayConfig`][pyvplot.AssayConfig] preset globally."""
     key = config.name.strip().lower()
     if key in ASSAY_PRESETS and not overwrite:
         raise ValueError(

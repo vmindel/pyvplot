@@ -165,6 +165,7 @@ def _make_random_store(seed: int = 42, n_frags: int = 800) -> FragmentStore:
     return FragmentStore(starts=starts, ends=ends, assay="chec")
 
 
+@pytest.mark.filterwarnings("ignore:.*anchors are on chromosomes with no fragments:UserWarning")
 @pytest.mark.parametrize("feature", ["midpoint", "cuts", "cuts_plus", "cuts_minus"])
 @pytest.mark.parametrize("window", [(120, 120, 4), (150, 90, 6), (60, 60, 1)])
 def test_vplot_exact_match_vs_naive_and_numba_parity(feature: str, window: tuple[int, int, int]):
@@ -219,6 +220,7 @@ def test_vplot_parallel_chunked_kernel_parity():
     np.testing.assert_allclose(grid_nb, grid_np, rtol=0, atol=1e-12)
 
 
+@pytest.mark.filterwarnings("ignore:.*anchors are on chromosomes with no fragments:UserWarning")
 @pytest.mark.parametrize("feature", ["midpoint", "cuts", "cuts_plus", "cuts_minus", "coverage"])
 @pytest.mark.parametrize("window", [(100, 100, 10), (120, 60, 5), (40, 40, 1)])
 def test_matrix_exact_match_vs_naive_and_numba_parity(feature: str, window: tuple[int, int, int]):

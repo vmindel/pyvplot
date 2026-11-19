@@ -339,8 +339,23 @@ def make_bias_figure() -> None:
     plt.close(fig)
 
 
+def make_signal_heatmap_figure() -> None:
+    """Per-anchor heatmap of TF-sized midpoints: strongly, weakly and un-bound sites."""
+    parts = [
+        vp.datasets.simulate_chec(n_sites=100, tf_fragments=tf, chrom=chrom, seed=seed)
+        for tf, chrom, seed in ((30, "chrA", 1), (8, "chrB", 2), (0, "chrC", 3))
+    ]
+    store = vp.FragmentStore.merge([s for s, _ in parts])
+    anchors = pd.concat([a.rename(index=lambda i, c=a["chrom"].iat[0]: f"{c}_{i}") for _, a in parts])
+    mat = store.to_matrix(anchors, flank=400, bin_size=10, feature="midpoint", len_range="tf").normalize("cpm")
+    fig, _ = mat.plot(title="TF-sized fragment midpoints (20-120 bp)", figsize=(4.2, 6.0))
+    fig.savefig(IMG_DIR / "signal_heatmap.png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     make_vplot_figures()
+    make_signal_heatmap_figure()
     make_footprint_and_matrix_figure()
     make_qc_and_phasogram_figures()
     make_bias_figure()

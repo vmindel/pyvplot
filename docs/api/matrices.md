@@ -1,6 +1,6 @@
 # Matrices & footprints
 
-Size-stratified `(n_anchors, n_bins)` signal matrices, `EnrichedHeatmap` handoff, 1-bp cleavage cut-site footprints, and per-anchor motif protection scores.
+Size-stratified `(n_anchors, n_bins)` signal matrices and their heatmaps, 1-bp cleavage cut-site footprints, and per-anchor motif protection scores.
 
 ::: pyvplot.to_matrix
 

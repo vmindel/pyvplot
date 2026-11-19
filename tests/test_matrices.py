@@ -1,15 +1,12 @@
-"""Tests for SignalMatrix, EnrichedHeatmap handoff, cut-site footprints, and footprint scores."""
+"""Tests for SignalMatrix, cut-site footprints, and footprint scores."""
 
 from __future__ import annotations
-
-import sys
-import types
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from pyvplot.matrices import cut_site_footprint, footprint_score, to_matrix
+from pyvplot.matrices import cut_site_footprint, footprint_score
 from pyvplot.store import FragmentStore
 
 
@@ -86,36 +83,6 @@ def test_to_matrix_size_bins_and_normalizations():
     assert {"pos", "mean", "std", "sem", "ci_low", "ci_high"}.issubset(prof.columns)
     long_df = m_tf.to_dataframe()
     assert len(long_df) == 20
-
-
-def test_enriched_heatmap_handoff_mock(monkeypatch: pytest.MonkeyPatch):
-    store, anchors = _make_protected_motif_store()
-    mat = to_matrix(store, anchors, flank=50, bin_size=5, feature="midpoint")
-
-    # Without EnrichedHeatmap installed, falls back cleanly to dict
-    fallback = mat.to_enriched_heatmap()
-    assert isinstance(fallback, dict)
-    assert set(fallback.keys()) == {"values", "region_index", "upstream", "downstream", "bin_size"}
-
-    # With a mock EnrichedHeatmap.NormalizedMatrix module, invokes from_array cleanly
-    captured: dict[str, object] = {}
-
-    class DummyNormalizedMatrix:
-        @classmethod
-        def from_array(cls, **kwargs):
-            captured.update(kwargs)
-            return ("normalized_matrix_ok", kwargs["values"].shape)
-
-    fake_mod = types.ModuleType("enrichedheatmap")
-    fake_mod.NormalizedMatrix = DummyNormalizedMatrix  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "enrichedheatmap", fake_mod)
-
-    res = mat.to_enriched_heatmap(name="TF_signal")
-    assert res == ("normalized_matrix_ok", (2, 20))
-    assert captured["upstream"] == 50
-    assert captured["downstream"] == 50
-    assert captured["bin_size"] == 5
-    assert captured["name"] == "TF_signal"
 
 
 def test_cut_site_footprint_and_protection_score():

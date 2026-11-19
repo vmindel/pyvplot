@@ -1,109 +1,118 @@
-# V-plots & differential V-plots
+# V-plots and differential V-plots
 
-A **V-plot** projects fragment midpoints (or cleavage ends) onto relative distance from an anchor center (x-axis) versus fragment length (y-axis). Tightly protected TF binding sites form a sharp V-shaped vertex at short fragment lengths (~40–100 bp), while flanking nucleosomes appear as horizontal clouds around ~150 bp.
+A V-plot places each fragment by its midpoint relative to the anchor (x) and its length (y), summed over all anchors. Suppose a protein protects `w` bp around the anchor. A fragment of length `L` that contains the protected region can have its midpoint anywhere within `±(L − w) / 2` of the centre. The cloud of protected fragments therefore widens with length, forming a V whose vertex sits at length ≈ `w`. Nucleosomes give a horizontal band near 150 bp, where their positions are fuzzy.
 
-## Expected/background normalization
+## Two conditions
 
-In raw or CPM V-plots, abundant ~150 bp nucleosomal fragments can visually drown out fainter 50–80 bp TF signatures. Dividing each fragment-length row by its expected background rate (`normalize("expected", expected_from="flank")` or `expected_from="genome"`) reveals both regimes simultaneously.
+`simulate_chec` with `tf_fragments=0` gives an unbound condition with the same anchors and nucleosome/background structure.
 
 ```python
 import numpy as np
-import pandas as pd
 import pyvplot as vp
 
-def simulate_condition(tf_strength: int, seed: int):
-    rng = np.random.default_rng(seed)
-    centers = np.arange(5_000, 45_000, 2_000)
-    anchors = pd.DataFrame(
-        {"chrom": ["chr1"] * len(centers), "center": centers, "strand": rng.choice(["+", "-"], len(centers))}
-    )
-    starts, ends = [], []
-    for c in centers:
-        for _ in range(tf_strength):
-            fl = int(rng.integers(50, 70))
-            mid = int(c + rng.normal(0, 5))
-            starts.append(mid - fl // 2)
-            ends.append(mid - fl // 2 + fl)
-        for _ in range(15):
-            fl = int(rng.integers(50, 70))
-            mid = int(c + rng.integers(-280, 280))
-            starts.append(mid - fl // 2)
-            ends.append(mid - fl // 2 + fl)
-        for _ in range(80):
-            fl = int(rng.integers(145, 160))
-            mid = int(c + rng.integers(-280, 280))
-            starts.append(mid - fl // 2)
-            ends.append(mid - fl // 2 + fl)
-    store = vp.FragmentStore(
-        {"chr1": np.asarray(starts, dtype=np.int32)},
-        {"chr1": np.asarray(ends, dtype=np.int32)},
-        assay="chec",
-    )
-    return store, anchors
+wt, anchors = vp.datasets.simulate_chec(n_sites=100, seed=1)
+ko, _ = vp.datasets.simulate_chec(n_sites=100, tf_fragments=0, seed=2)
 
-wt, anchors = simulate_condition(tf_strength=35, seed=1)
-mut, _ = simulate_condition(tf_strength=0, seed=2)
-
-vp_wt = vp.vplot(wt, anchors, flank=250, min_len=20, max_len=200, pos_bin=5, len_bin=5)
-vp_mut = vp.vplot(mut, anchors, flank=250, min_len=20, max_len=200, pos_bin=5, len_bin=5)
-
-vp_oe = vp_wt.normalize("expected", expected_from="flank")
-tf_row = int(np.argmin(np.abs(vp_oe.len_centers - 60)))
-center_col = int(np.argmin(np.abs(vp_oe.pos_centers - 0)))
-print(f"Expected-normalized enrichment at (pos=0, len=60): {vp_oe.counts[tf_row, center_col]:.2f}x")
+kw = dict(flank=250, min_len=20, max_len=200, pos_bin=5, len_bin=5)
+v_wt = wt.vplot(anchors, **kw)
+v_ko = ko.vplot(anchors, **kw)
+print(v_wt)
 ```
 
 ```text
-Expected-normalized enrichment at (pos=0, len=60): 88.70x
+VPlot(pos=[-250, 250) bp step 5, length=[20, 200) bp step 5, shape=(36, 100), n_anchors=100, feature='midpoint', normalization='raw', assay='chec')
 ```
 
-## Differential V-plots (mutant vs. WT)
+Choosing the axes: `pos_bin` and `len_bin` trade resolution for noise. With a few hundred anchors, 5 bp in both is a reasonable start; with tens of thousands, 1–2 bp works. `max_len - min_len` must be a multiple of `len_bin`, and `2 * flank` a multiple of `pos_bin`.
 
-`VPlot.diff()` automatically CPM-normalizes raw V-plots before differencing, applies optional 2D Gaussian smoothing, and marks the result with `is_diff=True` so plotting helpers automatically use a symmetric diverging colormap centered at 0.
+## Which normalisation
 
 ```python
-vp_diff = vp_mut.diff(vp_wt, mode="log2fc", pseudocount=0.5, smooth_sigma=(1.5, 1.5))
-print("Normalization:", vp_diff.normalization, "is_diff:", vp_diff.is_diff)
-print(f"Mut vs WT log2FC at TF center: {vp_diff.counts[tf_row, center_col]:.2f}")
+tf_row = int(np.argmin(np.abs(v_wt.len_centers - 60)))
+nuc_row = int(np.argmin(np.abs(v_wt.len_centers - 155)))
+centre = int(np.argmin(np.abs(v_wt.pos_centers)))
+
+for method in ("cpm", "expected"):
+    n = v_wt.normalize(method)
+    print(f"{method:9s} TF cell {n.counts[tf_row, centre]:8.3f}   nucleosome cell {n.counts[nuc_row, centre]:8.3f}")
 ```
 
 ```text
-Normalization: diff:log2fc is_diff: True
-Mut vs WT log2FC at TF center: -5.37
+cpm       TF cell   62.381   nucleosome cell    3.810
+expected  TF cell  523.998   nucleosome cell    0.947
 ```
 
-## Multi-condition tidy export for `plotnine`
+In CPM, the colour scale is set by whichever cells are largest. Here that is the TF vertex, because every simulated TF fragment sits within a few bp of the site. In real data TF signal is weaker and more spread out, and the abundant nucleosome band often sets the scale instead. `expected` divides every length row by its own level in the outer 20% of the window (`flank_frac=0.2`), so each row reads as enrichment over its flanks however abundant that length is. The TF vertex and a positioned nucleosome then show up on the same scale.
 
-Bundle labeled V-plots into a [`VPlotCollection`](../api/vplot.md) to export one tidy DataFrame for `plotnine` `facet_grid`:
+- `normalize("cpm")`: absolute signal per anchor per million fragments; use when comparing samples.
+- `normalize("expected")`: per-row enrichment over the flanks; use to see structure across all lengths. It needs counts in the flanks of every row (pyvplot warns if not).
+- `normalize("expected", expected_from="genome")`: per-row expectation from the store's genome-wide length distribution. It corrects for length composition but not for local accessibility, which is useful when the window is too narrow to have true flanks.
+- `normalize("log2_oe")`: `expected` on a log2 scale.
+
+## Differential V-plot
+
+`a.diff(b)` gives `a` relative to `b`, so pass the condition of interest first. Raw inputs are CPM-normalised first. The default pseudocount is half a raw count per cell expressed in CPM, one value shared by both samples. The log2FC therefore does not shrink as depth increases, and cells empty in both samples come out as 0.
+
+```python
+d = v_ko.diff(v_wt, smooth_sigma=(1.0, 1.0))
+print(d)
+print(f"KO vs WT at the TF vertex: {d.counts[tf_row, centre]:.2f} log2FC")
+print(f"KO vs WT in the nucleosome band: {d.counts[nuc_row, centre]:.2f} log2FC")
+```
+
+```text
+VPlot(pos=[-250, 250) bp step 5, length=[20, 200) bp step 5, shape=(36, 100), n_anchors=100, feature='midpoint', normalization='diff:log2fc', assay='chec')
+KO vs WT at the TF vertex: -7.54 log2FC
+KO vs WT in the nucleosome band: 0.09 log2FC
+```
+
+`smooth_sigma=(rows, cols)` is a Gaussian blur in bins, applied to each V-plot before the ratio (`smooth_before=False` smooths the ratio instead). Other modes are `"subtract"`, `"ratio"` and `"zscore"`. `d.plot()` uses a diverging colour map centred on 0.
+
+The nucleosome band moves slightly even though it is identical in both simulations. CPM divides by total fragments, and the KO library lacks the TF fragments, so everything else in it is a slightly larger share. Real libraries behave the same way. If TF fragments are a sizeable fraction of one library, compare V-plots normalised to their own flanks as a check. With these inputs the default pseudocount falls back to 0.5, so set one that suits O/E values:
+
+```py
+v_ko.normalize("expected").diff(v_wt.normalize("expected"), pseudocount=0.1)
+```
+
+## Collapsing to one dimension
+
+```python
+prof = v_wt.normalize("cpm").marginal_position(len_range="tf")        # positional profile of 20-120 bp fragments
+lens = v_wt.normalize("cpm").marginal_length(pos_range=(-20, 20))     # length distribution at the site
+print(f"20-120 bp midpoints peak at {prof.loc[prof['value'].idxmax(), 'pos']:+.1f} bp")
+print(f"most common length within 20 bp of the site: {lens.loc[lens['value'].idxmax(), 'length']:.1f} bp")
+```
+
+```text
+20-120 bp midpoints peak at +2.5 bp
+most common length within 20 bp of the site: 67.5 bp
+```
+
+## Several conditions in one figure
+
+`VPlotCollection` stacks labelled V-plots into one tidy table for faceting:
 
 ```python
 coll = (
     vp.VPlotCollection()
-    .add(vp_wt.normalize("cpm"), tf="CTCF", condition="WT")
-    .add(vp_mut.normalize("cpm"), tf="CTCF", condition="Mut")
+    .add(v_wt.normalize("expected"), condition="WT")
+    .add(v_ko.normalize("expected"), condition="KO")
 )
 tidy = coll.to_dataframe()
-print(tidy.columns.tolist(), "rows:", len(tidy))
+print(coll)
+print(tidy.columns.tolist(), len(tidy))
 ```
 
 ```text
-['pos', 'length', 'value', 'tf', 'condition'] rows: 7200
+VPlotCollection(2 V-plots: condition=WT; condition=KO)
+['pos', 'length', 'value', 'condition'] 7200
 ```
-
-Render with `plotnine` or `matplotlib`:
 
 ```py
-p = vp_oe.plot_plotnine(cmap="magma", title="WT ChEC-seq (O/E)")
-p_facet = coll.plot_plotnine(facet="tf ~ condition")
-fig, ax = vp_diff.plot(title="Mutant vs WT (log2FC)")
+coll.plot_plotnine(facet="~ condition")          # plotnine facet_wrap / facet_grid formula
+tidy.to_csv("vplots.tsv.gz", sep="\t", index=False)   # or facet in ggplot2
 ```
 
-### Expected figures
-
-Comparing **CPM** (where abundant ~150 bp flanking nucleosomes dominate the dynamic range), **row-wise expected/background normalization** (which rescues the short 40–100 bp TF V-arms), and the **differential `log2FC` V-plot** (blue TF V loss + red central nucleosome invasion upon TF knockout):
-
 ![Comparison of CPM, expected-normalized, and differential V-plots](../img/vplot_norm_comparison.png)
-
-Multi-condition faceting directly from `VPlotCollection.plot_plotnine(facet="tf ~ condition")`:
 
 ![Faceted plotnine VPlotCollection across transcription factors and conditions](../img/vplot_plotnine_facet.png)

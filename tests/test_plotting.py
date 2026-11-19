@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotnine as p9
+import pytest
 
 from pyvplot.plotting import (
     plot_cut_footprint_matplotlib,
@@ -83,3 +84,40 @@ def test_plotnine_renderers():
         assert isinstance(p, p9.ggplot)
         fig = p.draw()
         plt.close(fig)
+
+
+def test_signal_matrix_heatmaps():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    import pyvplot as vp
+
+    store, anchors = vp.datasets.simulate_chec(n_sites=20, seed=0)
+    mat = store.to_matrix(anchors, flank=200, bin_size=10, feature="midpoint", len_range="tf")
+
+    fig, (ax_prof, ax_heat) = mat.plot()
+    img = ax_heat.get_images()[0].get_array()
+    np.testing.assert_allclose(np.asarray(img).mean(axis=1), np.sort(mat.values.mean(axis=1))[::-1])
+    assert ax_prof is not None and ax_heat.get_xlim() == (-200.0, 200.0)
+    plt.close(fig)
+
+    order = np.arange(mat.n_anchors)[::-1][:5]
+    fig, (ax_prof, ax_heat) = mat.plot(order=order, profile=False)
+    assert ax_prof is None
+    np.testing.assert_array_equal(np.asarray(ax_heat.get_images()[0].get_array()), mat.values[order])
+    plt.close(fig)
+
+    fig, (_, ax_heat) = mat.normalize("row_zscore").plot()
+    assert ax_heat.get_images()[0].get_cmap().name == "RdBu_r"
+    lo, hi = ax_heat.get_images()[0].get_clim()
+    assert lo == -hi
+    plt.close(fig)
+
+    p = mat.plot_plotnine()
+    p.draw()
+    plt.close("all")
+
+    with pytest.raises(ValueError, match="order"):
+        mat.plot(order="median")

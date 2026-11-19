@@ -1,4 +1,4 @@
-"""Publication-ready matplotlib and plotnine helpers for V-plots, cut footprints, and QC."""
+"""matplotlib and plotnine helpers for V-plots, per-anchor heatmaps, cut footprints and QC."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    from pyvplot.matrices import CutSiteFootprint
+    from pyvplot.matrices import CutSiteFootprint, SignalMatrix
     from pyvplot.qc import PhasogramResult
     from pyvplot.store import FragmentStore
     from pyvplot.vplot import VPlot, VPlotCollection
@@ -74,7 +74,7 @@ def plot_vplot_matplotlib(
     center_line: bool = True,
     figsize: tuple[float, float] = (6.0, 4.5),
 ) -> tuple[Any, Any]:
-    """Render a :class:`~pyvplot.vplot.VPlot` (or differential V-plot) using ``matplotlib``.
+    """Render a [`VPlot`][pyvplot.VPlot] (or differential V-plot) using ``matplotlib``.
 
     Returns ``(fig, ax)``.
     """
@@ -129,7 +129,7 @@ def plot_vplot_plotnine(
     fill_label: str | None = None,
     center_line: bool = True,
 ) -> Any:
-    """Render a :class:`~pyvplot.vplot.VPlot` as a customizable ``plotnine`` ``ggplot`` object."""
+    """Render a [`VPlot`][pyvplot.VPlot] as a customizable ``plotnine`` ``ggplot`` object."""
     p9 = _require_plotnine()
     df = vp.to_dataframe()
     lo, hi = (
@@ -182,7 +182,7 @@ def plot_vplot_collection_plotnine(
     fill_label: str = "Signal",
     center_line: bool = True,
 ) -> Any:
-    """Render a :class:`~pyvplot.vplot.VPlotCollection` as a faceted ``plotnine`` plot."""
+    """Render a [`VPlotCollection`][pyvplot.VPlotCollection] as a faceted ``plotnine`` plot."""
     p9 = _require_plotnine()
     df = collection.to_dataframe()
     if len(df) == 0:
@@ -412,3 +412,190 @@ def plot_cut_footprint_plotnine(
         + p9.theme_minimal()
     )
     return p
+
+
+def _row_order(values: np.ndarray, order: Any) -> np.ndarray:
+    n = values.shape[0]
+    if order is None:
+        return np.arange(n)
+    if isinstance(order, str):
+        if order not in {"mean", "max"}:
+            raise ValueError(f"Unknown order {order!r}; expected 'mean', 'max', None, or row positions.")
+        key = values.mean(axis=1) if order == "mean" else values.max(axis=1)
+        return np.argsort(-key, kind="stable")
+    idx = np.asarray(order)
+    if idx.dtype == bool or idx.ndim != 1:
+        raise ValueError("`order` must be 'mean', 'max', None, or a 1D array of row positions.")
+    return idx.astype(np.int64)
+
+
+def _heatmap_limits(values: np.ndarray, vmin: float | None, vmax: float | None, quantile_clip: float) -> tuple[float, float, bool]:
+    finite = values[np.isfinite(values)]
+    diverging = finite.size > 0 and float(finite.min()) < 0.0
+    if diverging:
+        lim = float(np.quantile(np.abs(finite), quantile_clip)) if finite.size else 1.0
+        lim = lim if lim > 0 else 1.0
+        return (-lim if vmin is None else vmin), (lim if vmax is None else vmax), True
+    hi = float(np.quantile(finite, quantile_clip)) if finite.size else 1.0
+    if hi <= 0.0:
+        hi = float(finite.max()) if finite.size and finite.max() > 0 else 1.0
+    return (0.0 if vmin is None else vmin), (hi if vmax is None else vmax), False
+
+
+def plot_signal_matrix_matplotlib(
+    mat: SignalMatrix,
+    order: str | Any | None = "mean",
+    cmap: str | None = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    quantile_clip: float = 0.99,
+    profile: bool = True,
+    ci: float | None = 0.95,
+    title: str | None = None,
+    xlabel: str = "Distance from anchor center (bp)",
+    cbar_label: str | None = None,
+    figsize: tuple[float, float] = (4.0, 6.0),
+) -> tuple[Any, tuple[Any, Any]]:
+    """Plot a [`SignalMatrix`][pyvplot.SignalMatrix] as a heatmap, with its mean profile on top.
+
+    Parameters
+    ----------
+    mat:
+        Matrix to plot; one heatmap row per anchor.
+    order:
+        Row order, top to bottom: ``"mean"`` (default, highest row mean first),
+        ``"max"``, ``None`` (input order), or an array of row positions, e.g.
+        ``np.argsort(-scores["protection_score"].to_numpy())``. Positions may
+        select a subset of rows.
+    cmap:
+        Colour map. Defaults to ``"magma"``, or ``"RdBu_r"`` centred on 0 when
+        the matrix has negative values (z-scores, log ratios).
+    vmin, vmax:
+        Colour limits. By default ``0`` to the ``quantile_clip`` quantile, so a
+        few very deep anchors do not wash out the rest.
+    quantile_clip:
+        Quantile used for the default upper limit.
+    profile:
+        Draw the mean profile (over the plotted rows) above the heatmap.
+    ci:
+        Confidence level of the shaded band around the profile; ``None`` for no band.
+    title, xlabel, cbar_label:
+        Labels; ``cbar_label`` defaults to the matrix's normalisation.
+    figsize:
+        Figure size in inches.
+
+    Returns
+    -------
+    (fig, (ax_profile, ax_heatmap))
+        ``ax_profile`` is ``None`` when ``profile=False``.
+    """
+    plt = _require_matplotlib()
+    rows = _row_order(mat.values, order)
+    vals = mat.values[rows]
+    lo, hi, diverging = _heatmap_limits(vals, vmin, vmax, quantile_clip)
+    use_cmap = cmap if cmap is not None else ("RdBu_r" if diverging else "magma")
+
+    fig = plt.figure(figsize=figsize)
+    if profile:
+        gs = fig.add_gridspec(2, 2, height_ratios=[1, 4], width_ratios=[1, 0.05], hspace=0.05, wspace=0.05)
+        ax_prof = fig.add_subplot(gs[0, 0])
+        ax_heat = fig.add_subplot(gs[1, 0], sharex=ax_prof)
+        cax = fig.add_subplot(gs[1, 1])
+    else:
+        gs = fig.add_gridspec(1, 2, width_ratios=[1, 0.05], wspace=0.05)
+        ax_prof = None
+        ax_heat = fig.add_subplot(gs[0, 0])
+        cax = fig.add_subplot(gs[0, 1])
+
+    n = vals.shape[0]
+    im = ax_heat.imshow(
+        vals,
+        aspect="auto",
+        cmap=use_cmap,
+        vmin=lo,
+        vmax=hi,
+        extent=[-mat.upstream, mat.downstream, n, 0],
+    )
+    ax_heat.axvline(0.0, color="white" if not diverging else "black", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax_heat.set_xlabel(xlabel)
+    ax_heat.set_ylabel(f"{n:,} anchors")
+    ax_heat.set_yticks([])
+    fig.colorbar(im, cax=cax, label=cbar_label if cbar_label is not None else mat.normalization)
+
+    if ax_prof is not None:
+        x = mat.bin_centers
+        mean = vals.mean(axis=0) if n else np.zeros(mat.n_bins)
+        ax_prof.plot(x, mean, color="#2c3e50", linewidth=1.2)
+        if ci is not None and n > 1:
+            z = {0.90: 1.6448536, 0.95: 1.9599640, 0.99: 2.5758293}.get(round(ci, 2))
+            if z is None:
+                from scipy.stats import norm as _norm
+
+                z = float(_norm.ppf(0.5 + 0.5 * ci))
+            sem = vals.std(axis=0, ddof=1) / np.sqrt(n)
+            ax_prof.fill_between(x, mean - z * sem, mean + z * sem, color="#2c3e50", alpha=0.2, linewidth=0)
+        ax_prof.axvline(0.0, color="#666666", linestyle="--", linewidth=0.8, alpha=0.6)
+        ax_prof.set_ylabel("Mean")
+        ax_prof.tick_params(labelbottom=False)
+        ax_prof.spines[["top", "right"]].set_visible(False)
+
+    top = ax_prof if ax_prof is not None else ax_heat
+    lr = "all lengths" if mat.len_range is None else f"{mat.len_range[0]}-{mat.len_range[1]} bp"
+    top.set_title(title if title is not None else f"{mat.feature}, {lr}")
+    return fig, (ax_prof, ax_heat)
+
+
+def plot_signal_matrix_plotnine(
+    mat: SignalMatrix,
+    order: str | Any | None = "mean",
+    cmap: str | None = None,
+    limits: tuple[float, float] | None = None,
+    quantile_clip: float = 0.99,
+    title: str | None = None,
+    xlabel: str = "Distance from anchor center (bp)",
+    fill_label: str | None = None,
+) -> Any:
+    """Plot a [`SignalMatrix`][pyvplot.SignalMatrix] as a ``plotnine`` heatmap (``geom_raster``).
+
+    Rows are ordered as in [`plot_signal_matrix_matplotlib`][pyvplot.plotting.plot_signal_matrix_matplotlib].
+    For the mean profile, plot ``mat.mean_profile(ci=0.95)`` separately. Each
+    cell is one data-frame row, so for matrices above a few hundred thousand
+    cells the matplotlib version is much faster.
+    """
+    p9 = _require_plotnine()
+    import pandas as pd
+
+    rows = _row_order(mat.values, order)
+    vals = mat.values[rows]
+    lo, hi, diverging = _heatmap_limits(vals, None, None, quantile_clip)
+    lims = limits if limits is not None else (lo, hi)
+    n_rows, n_bins = vals.shape
+    df = pd.DataFrame(
+        {
+            "pos": np.tile(mat.bin_centers, n_rows),
+            "row": np.repeat(np.arange(n_rows), n_bins),
+            "value": np.clip(vals.ravel(), lims[0], lims[1]),
+        }
+    )
+    fill = (
+        p9.scale_fill_gradient2(low="#2166ac", mid="white", high="#b2182b", midpoint=0, limits=lims)
+        if (cmap is None and diverging)
+        else p9.scale_fill_cmap(cmap_name=cmap or "magma", limits=lims)
+    )
+    lr = "all lengths" if mat.len_range is None else f"{mat.len_range[0]}-{mat.len_range[1]} bp"
+    return (
+        p9.ggplot(df, p9.aes(x="pos", y="row", fill="value"))
+        + p9.geom_raster()
+        + p9.geom_vline(xintercept=0, linetype="dashed", color="white", alpha=0.6)
+        + fill
+        + p9.scale_y_reverse(expand=(0, 0))
+        + p9.scale_x_continuous(expand=(0, 0))
+        + p9.labs(
+            x=xlabel,
+            y=f"{n_rows:,} anchors",
+            fill=fill_label if fill_label is not None else mat.normalization,
+            title=title if title is not None else f"{mat.feature}, {lr}",
+        )
+        + p9.theme_minimal()
+        + p9.theme(axis_text_y=p9.element_blank(), panel_grid=p9.element_blank())
+    )

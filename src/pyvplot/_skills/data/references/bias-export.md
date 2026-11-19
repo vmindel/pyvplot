@@ -10,7 +10,7 @@ import pyvplot as vp
 # Estimate 6-mer cleavage propensity from naked-DNA fragments + FASTA/dict
 bias = vp.KmerBiasTable.from_cuts(
     naked_dna_store,
-    genome_fasta,           # dict[chrom, str], pysam.FastaFile, or pyfaidx.Fasta
+    "genome.fa",            # FASTA path (plain/gzipped), dict[chrom, str], pysam.FastaFile, or pyfaidx.Fasta
     k=6,
     cut_offset=3,           # default k // 2
     pseudocount=1.0,
@@ -44,7 +44,8 @@ vp.to_bedgraph(frags, "tf_midpoints.bedGraph.gz", feature="midpoint", len_range=
 # BigWig (requires pyvplot[bigwig] -> pyBigWig)
 vp.to_bigwig(frags, "tf_midpoints.bw", chrom_sizes={"chr1": 248956422}, feature="midpoint", len_range="tf")
 
-# pymisha sparse or dense track (requires pymisha initialized)
+# pymisha sparse or dense track (requires pymisha initialized). Calls signature-checked
+# against pymisha 0.20.1 but not exercised against a live database in the test suite.
 vp.to_pymisha(frags, "chec.tf_cuts", feature="cuts", len_range="tf", bin_size=10, mode="sparse")
 vp.to_pymisha(frags, "chec.nuc_mid", feature="midpoint", len_range="mononucleosome", bin_size=10, mode="dense")
 ```

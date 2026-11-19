@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from pyvplot.assays import resolve_len_range
 from pyvplot.extract import accumulate_vplot
 from pyvplot.store import FragmentStore
 
@@ -49,7 +51,7 @@ def _gaussian_filter_2d(
         return out
 
 
-@dataclass
+@dataclass(repr=False)
 class VPlot:
     """2D fragment-length vs. relative-position histogram around genomic anchors.
 
@@ -68,7 +70,7 @@ class VPlot:
     n_anchors:
         Number of anchors aggregated into this V-plot.
     n_fragments:
-        Total number of fragments in the source :class:`~pyvplot.store.FragmentStore`
+        Total number of fragments in the source [`FragmentStore`][pyvplot.FragmentStore]
         (used for CPM normalization).
     assay:
         Name of the assay preset (e.g., ``"chec"``, ``"atac"``).
@@ -97,6 +99,14 @@ class VPlot:
     is_diff: bool = False
     genome_len_counts: np.ndarray | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __repr__(self) -> str:
+        return (
+            f"VPlot(pos=[{self.pos_edges[0]:g}, {self.pos_edges[-1]:g}) bp step {self.pos_bin:g}, "
+            f"length=[{self.len_edges[0]:g}, {self.len_edges[-1]:g}) bp step {self.len_bin:g}, "
+            f"shape={self.shape}, n_anchors={self.n_anchors}, feature={self.feature!r}, "
+            f"normalization={self.normalization!r}, assay={self.assay!r})"
+        )
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -230,8 +240,20 @@ class VPlot:
             out = arr / total if total > 0.0 else np.zeros_like(arr)
             return self._clone(out, normalization="density")
 
-        if m == "expected":
+        if m in {"expected", "log2_oe"}:
             exp = self._expected_row_rates(expected_from=expected_from, flank_frac=flank_frac)
+            starved = (exp == 0.0) & (np.sum(arr, axis=1) > 0.0)
+            if np.any(starved):
+                warnings.warn(
+                    f"{int(starved.sum())} of {len(exp)} length rows have counts but zero expected "
+                    f"background (expected_from={expected_from!r}); they are divided by "
+                    f"pseudocount={pseudocount:g} and will dominate the plot. Use a wider flank, "
+                    "coarser len_bin, more anchors, or expected_from='genome'.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+        if m == "expected":
             out = arr / (exp[:, None] + pseudocount)
             # Rows with zero expected AND zero observed remain 0
             zero_rows = (exp == 0.0) & (np.sum(arr, axis=1) == 0.0)
@@ -239,7 +261,6 @@ class VPlot:
             return self._clone(out, normalization=f"expected:{expected_from}")
 
         if m == "log2_oe":
-            exp = self._expected_row_rates(expected_from=expected_from, flank_frac=flank_frac)
             out = np.log2((arr + pseudocount) / (exp[:, None] + pseudocount))
             return self._clone(out, normalization=f"log2_oe:{expected_from}")
 
@@ -253,6 +274,22 @@ class VPlot:
             f"Unknown normalization method {method!r}. Expected one of: "
             "'cpm', 'cpm_total', 'per_anchor', 'density', 'expected', 'log2_oe', 'row_zscore'."
         )
+
+    def raw_count_scale(self) -> float | None:
+        """Value of one raw count in this V-plot's current units, or ``None`` if unknown.
+
+        Known for ``raw``, ``cpm``, ``cpm_total`` and ``per_anchor`` (and smoothed
+        versions of them); ``None`` for shape-changing normalisations such as
+        ``expected`` or ``density``.
+        """
+        n_frag = float(self.n_fragments) / 1e6 if self.n_fragments > 0 else 1.0
+        n_anc = float(self.n_anchors) if self.n_anchors > 0 else 1.0
+        return {
+            "raw": 1.0,
+            "cpm": 1.0 / (n_frag * n_anc),
+            "cpm_total": 1.0 / n_frag,
+            "per_anchor": 1.0 / n_anc,
+        }.get(self.normalization)
 
     def smooth(
         self,
@@ -269,7 +306,7 @@ class VPlot:
         self,
         other: VPlot,
         mode: str = "log2fc",
-        pseudocount: float = 0.5,
+        pseudocount: float | None = None,
         smooth_sigma: float | tuple[float, float] | None = None,
         normalize_first: str | None = "cpm",
         smooth_before: bool = True,
@@ -279,11 +316,19 @@ class VPlot:
         Parameters
         ----------
         other:
-            Reference :class:`VPlot` with identical position and length axes.
+            Reference [`VPlot`][pyvplot.VPlot] with identical position and length axes.
         mode:
             Comparison metric: ``"log2fc"``, ``"subtract"``, ``"ratio"``, or ``"zscore"``.
         pseudocount:
-            Pseudocount added to numerator and denominator for ``"log2fc"`` and ``"ratio"``.
+            Added to numerator and denominator for ``"log2fc"`` and ``"ratio"``.
+            ``None`` (default) adds half a raw count per cell, in the V-plots'
+            normalised units (see [`raw_count_scale`][pyvplot.VPlot.raw_count_scale]):
+            one value shared by both, the geometric mean of the two samples'
+            half-count values. The result therefore does not shrink towards 0
+            as sequencing depth grows, and cells empty in both samples are 0.
+            A number is added as-is, in the V-plots' current units. For
+            normalisations without a known count scale (``expected``,
+            ``density``, ...) the default falls back to ``0.5`` in those units.
         smooth_sigma:
             Optional 2D Gaussian smoothing ``(sigma_len, sigma_pos)``.
         normalize_first:
@@ -309,13 +354,22 @@ class VPlot:
             a = a.smooth(smooth_sigma)
             b = b.smooth(smooth_sigma)
 
+        if pseudocount is None:
+            # One shared value for both samples, so cells empty in both give exactly 0;
+            # the geometric mean keeps it at half a raw count in either sample's units
+            # up to the square root of their depth ratio.
+            sa, sb = a.raw_count_scale(), b.raw_count_scale()
+            pc = 0.5 * float(np.sqrt(sa * sb)) if sa is not None and sb is not None else 0.5
+        else:
+            pc = float(pseudocount)
+
         m = mode.lower()
         if m == "log2fc":
-            vals = np.log2((a.counts + pseudocount) / (b.counts + pseudocount))
+            vals = np.log2((a.counts + pc) / (b.counts + pc))
         elif m == "subtract":
             vals = a.counts - b.counts
         elif m == "ratio":
-            vals = (a.counts + pseudocount) / (b.counts + pseudocount)
+            vals = (a.counts + pc) / (b.counts + pc)
         elif m == "zscore":
             delta = a.counts - b.counts
             sd = float(np.std(delta))
@@ -339,15 +393,22 @@ class VPlot:
             normalization=f"diff:{m}",
             is_diff=True,
             genome_len_counts=None,
-            metadata={"diff_mode": m, "pseudocount": pseudocount},
+            metadata={"diff_mode": m, "pseudocount": pc},
         )
 
     def marginal_position(
         self,
-        len_range: tuple[float, float] | None = None,
+        len_range: tuple[float, float] | str | None = None,
         agg: str = "sum",
     ) -> pd.DataFrame:
-        """Collapse the V-plot along fragment length to a 1D positional profile."""
+        """Collapse the V-plot along fragment length to a 1D positional profile.
+
+        ``len_range`` keeps length rows whose bin centre lies in the inclusive
+        ``(min_len, max_len)`` range; a size-bin name of this V-plot's assay
+        (``"tf"``, ``"nfr"``, ...) also works. Returns columns ``pos`` and ``value``.
+        """
+        if isinstance(len_range, str):
+            len_range = resolve_len_range(self.assay, len_range)
         if len_range is None:
             sub = self.counts
         else:
@@ -371,7 +432,12 @@ class VPlot:
         pos_range: tuple[float, float] | None = None,
         agg: str = "sum",
     ) -> pd.DataFrame:
-        """Collapse the V-plot along position to a 1D fragment-length profile."""
+        """Collapse the V-plot along position to a 1D fragment-length profile.
+
+        ``pos_range`` keeps position columns whose bin centre lies in the inclusive
+        ``(min_pos, max_pos)`` range (bp from the anchor). Returns columns ``length``
+        and ``value``.
+        """
         if pos_range is None:
             sub = self.counts
         else:
@@ -420,18 +486,22 @@ class VPlot:
 
 
 class VPlotCollection:
-    """Collection of labeled :class:`VPlot` objects for multi-condition faceting."""
+    """Collection of labeled [`VPlot`][pyvplot.VPlot] objects for multi-condition faceting."""
 
     def __init__(self, items: list[tuple[VPlot, dict[str, Any]]] | None = None) -> None:
         self._items: list[tuple[VPlot, dict[str, Any]]] = list(items) if items is not None else []
 
     def add(self, vp: VPlot, **metadata: Any) -> VPlotCollection:
-        """Add a :class:`VPlot` with condition/factor metadata (e.g., ``tf="CTCF", condition="WT"``)."""
+        """Add a [`VPlot`][pyvplot.VPlot] with condition/factor metadata (e.g., ``tf="CTCF", condition="WT"``)."""
         self._items.append((vp, dict(metadata)))
         return self
 
     def __len__(self) -> int:
         return len(self._items)
+
+    def __repr__(self) -> str:
+        labels = [", ".join(f"{k}={v}" for k, v in meta.items()) for _, meta in self._items]
+        return f"VPlotCollection({len(self)} V-plots: {'; '.join(labels) or 'empty'})"
 
     @property
     def items(self) -> list[tuple[VPlot, dict[str, Any]]]:
@@ -464,31 +534,59 @@ def vplot(
     feature: str = "midpoint",
     use_numba: bool | None = None,
 ) -> VPlot:
-    """Compute a 2D V-plot (fragment length vs. relative position) around ``anchors``.
+    """Count fragments by (position relative to anchor, fragment length) around ``anchors``.
+
+    Each fragment within the window adds 1 to the cell given by its ``feature``
+    position (relative to the anchor centre, in the anchor's 5'->3' orientation)
+    and its length. Summed over anchors, protected TF sites give a V whose
+    vertex sits at the anchor; nucleosomes give a broad band near 150 bp.
 
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to query.
+        [`FragmentStore`][pyvplot.FragmentStore] to query.
     anchors:
-        Anchor table (DataFrame, dict, list, or BED file path).
+        Anchor table: DataFrame (``chrom`` + ``center``, or ``chrom`` + ``start``
+        + ``end``; optional ``strand``), dict of columns, or a BED file path.
+        ``-`` strand anchors are mirrored so upstream is always on the left.
     flank:
-        Symmetric half-window (bp) around each anchor center when ``upstream`` /
-        ``downstream`` are not given.
+        Half-window (bp) on each side of the anchor centre.
     upstream, downstream:
-        Optional asymmetric window bounds (bp) around each anchor center.
+        Asymmetric window (bp), relative to anchor orientation. Override ``flank``.
     min_len, max_len:
-        Half-open fragment-length range ``[min_len, max_len)`` (bp).
+        Length axis, half-open ``[min_len, max_len)`` bp. ``max_len - min_len``
+        must be a multiple of ``len_bin``.
     pos_bin:
-        Bin width along relative position (bp).
+        Bin width along position (bp). ``upstream + downstream`` must be a
+        multiple of it.
     len_bin:
         Bin width along fragment length (bp).
     feature:
-        Feature to project onto position: ``"midpoint"`` (default for V-plots),
-        ``"cuts"``, ``"cuts_plus"``, or ``"cuts_minus"``.
+        Which point of each fragment is placed on the position axis:
+        ``"midpoint"`` (default; the classic V-plot), ``"cuts"`` (both ends,
+        each counted once), ``"cuts_plus"`` (left end in anchor orientation),
+        or ``"cuts_minus"`` (right end).
     use_numba:
-        Override automatic Numba dispatch (``True`` / ``False`` / ``None``).
+        ``None`` uses Numba when installed; ``False`` forces the NumPy path.
+
+    Returns
+    -------
+    VPlot
+        Raw counts in ``.counts`` with shape ``(n_len, n_pos)``. Normalise with
+        [`VPlot.normalize`][pyvplot.VPlot.normalize] before comparing samples.
+
+    Examples
+    --------
+    >>> v = vp.vplot(store, "motifs.bed", flank=300, min_len=20, max_len=250, pos_bin=5, len_bin=5)
+    >>> v.normalize("expected").plot()
     """
+    if isinstance(min_len, str) or isinstance(max_len, str):
+        raise TypeError(
+            "vplot() needs numeric min_len/max_len: they are the edges of the length axis "
+            "[min_len, max_len), not a filter. Named size bins such as 'tf' are accepted by "
+            "the len_range= argument of to_matrix(), cut_site_footprint(), footprint_score(), "
+            "phasogram() and extract_events()."
+        )
     up = flank if upstream is None else int(upstream)
     dn = flank if downstream is None else int(downstream)
 

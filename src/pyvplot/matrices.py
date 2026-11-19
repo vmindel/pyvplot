@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from pyvplot.assays import resolve_len_range
 from pyvplot.extract import accumulate_matrix
 from pyvplot.store import FragmentStore
 
@@ -17,28 +18,17 @@ def _resolve_len_range(
     len_range: tuple[int, int] | str | None,
 ) -> tuple[int, int] | None:
     """Resolve an explicit ``(min_len, max_len)`` tuple or named assay size bin."""
-    if len_range is None:
-        return None
-    if isinstance(len_range, str):
-        if len_range not in store.assay.size_bins:
-            available = ", ".join(sorted(store.assay.size_bins)) or "(none)"
-            raise ValueError(
-                f"Unknown size bin {len_range!r} for assay {store.assay.name!r}. "
-                f"Available size bins: {available}."
-            )
-        return store.assay.size_bins[len_range]
-    if len(len_range) != 2:
-        raise ValueError(f"Expected (min_len, max_len) tuple, got {len_range!r}.")
-    return (int(len_range[0]), int(len_range[1]))
+    return resolve_len_range(store.assay, len_range)
 
 
-@dataclass
+@dataclass(repr=False)
 class SignalMatrix:
-    """Per-anchor binned signal matrix ready for heatmaps and ``EnrichedHeatmap``.
+    """Per-anchor binned signal matrix: one row per anchor, one column per position bin.
 
     Implements duck-typed mapping access (``mat["values"]``, ``mat["upstream"]``,
     etc.) and ``__array__`` so it can be passed directly into downstream tools
-    or converted via :meth:`to_enriched_heatmap`.
+    or exported with [`to_dict`][pyvplot.SignalMatrix.to_dict]. Plot with
+    [`plot`][pyvplot.SignalMatrix.plot] or [`plot_plotnine`][pyvplot.SignalMatrix.plot_plotnine].
 
     Attributes
     ----------
@@ -58,7 +48,7 @@ class SignalMatrix:
     len_range:
         Optional inclusive ``(min_len, max_len)`` filter used during extraction.
     n_fragments:
-        Total fragments in source :class:`~pyvplot.store.FragmentStore`.
+        Total fragments in source [`FragmentStore`][pyvplot.FragmentStore].
     assay:
         Source assay name.
     normalization:
@@ -78,6 +68,14 @@ class SignalMatrix:
     assay: str = "generic"
     normalization: str = "raw"
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __repr__(self) -> str:
+        lr = "all" if self.len_range is None else f"{self.len_range[0]}-{self.len_range[1]} bp"
+        return (
+            f"SignalMatrix(shape={self.shape}, window=[-{self.upstream}, +{self.downstream}) bp, "
+            f"bin_size={self.bin_size}, feature={self.feature!r}, lengths={lr}, "
+            f"normalization={self.normalization!r}, assay={self.assay!r})"
+        )
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -112,7 +110,11 @@ class SignalMatrix:
         raise KeyError(key)
 
     def to_dict(self) -> dict[str, Any]:
-        """Return lightweight dict accepted by ``EnrichedHeatmap`` or custom pipelines."""
+        """Return a plain dict (``values``, ``region_index``, ``upstream``, ``downstream``, ``bin_size``).
+
+        Uses only NumPy and built-in types, so any other tool can consume it
+        without pyvplot installed.
+        """
         return {
             "values": self.values,
             "region_index": self.region_index,
@@ -121,49 +123,24 @@ class SignalMatrix:
             "bin_size": self.bin_size,
         }
 
-    def to_enriched_heatmap(
-        self,
-        name: str | None = None,
-        strict: bool = False,
-    ) -> Any:
-        """Convert to ``EnrichedHeatmap``'s ``NormalizedMatrix`` if installed.
+    def plot(self, **kwargs: Any) -> Any:
+        """Heatmap (one row per anchor) with the mean profile on top, via ``matplotlib``.
 
-        Falls back to :meth:`to_dict` when ``EnrichedHeatmap`` is not installed
-        unless ``strict=True`` is specified.
+        See [`plot_signal_matrix_matplotlib`][pyvplot.plotting.plot_signal_matrix_matplotlib].
+        Returns ``(fig, (ax_profile, ax_heatmap))``.
         """
-        nm_cls = None
-        for mod_name in ("enrichedheatmap", "EnrichedHeatmap", "pyenrichedheatmap"):
-            try:
-                mod = __import__(mod_name, fromlist=["NormalizedMatrix"])
-                nm_cls = getattr(mod, "NormalizedMatrix", None)
-                if nm_cls is not None:
-                    break
-            except ImportError:
-                continue
+        from pyvplot.plotting import plot_signal_matrix_matplotlib
 
-        if nm_cls is not None and hasattr(nm_cls, "from_array"):
-            kwargs: dict[str, Any] = {
-                "values": self.values,
-                "upstream": self.upstream,
-                "downstream": self.downstream,
-                "bin_size": self.bin_size,
-                "region_index": self.region_index,
-            }
-            if name is not None:
-                kwargs["name"] = name
-            try:
-                return nm_cls.from_array(**kwargs)
-            except TypeError:
-                kwargs.pop("name", None)
-                kwargs.pop("region_index", None)
-                return nm_cls.from_array(**kwargs)
+        return plot_signal_matrix_matplotlib(self, **kwargs)
 
-        if strict:
-            raise ImportError(
-                "Could not import `NormalizedMatrix` from `EnrichedHeatmap` / `enrichedheatmap`. "
-                "Use `.to_dict()` for duck-typed access."
-            )
-        return self.to_dict()
+    def plot_plotnine(self, **kwargs: Any) -> Any:
+        """Heatmap (one row per anchor) as a ``plotnine`` ``ggplot``.
+
+        See [`plot_signal_matrix_plotnine`][pyvplot.plotting.plot_signal_matrix_plotnine].
+        """
+        from pyvplot.plotting import plot_signal_matrix_plotnine
+
+        return plot_signal_matrix_plotnine(self, **kwargs)
 
     def normalize(self, method: str = "cpm") -> SignalMatrix:
         """Return a normalized copy of this signal matrix.
@@ -218,7 +195,7 @@ class SignalMatrix:
         )
 
     def subset(self, indices: Any) -> SignalMatrix:
-        """Return a new :class:`SignalMatrix` restricted to selected anchor rows."""
+        """Return a new [`SignalMatrix`][pyvplot.SignalMatrix] restricted to selected anchor rows."""
         idx_arr = np.asarray(indices)
         return SignalMatrix(
             values=np.ascontiguousarray(self.values[idx_arr], dtype=np.float64),
@@ -300,12 +277,12 @@ def to_matrix(
     normalize: str | None = None,
     use_numba: bool | None = None,
 ) -> SignalMatrix:
-    """Compute a size-stratified ``(n_anchors, n_bins)`` :class:`SignalMatrix`.
+    """Compute a size-stratified ``(n_anchors, n_bins)`` [`SignalMatrix`][pyvplot.SignalMatrix].
 
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to query.
+        [`FragmentStore`][pyvplot.FragmentStore] to query.
     anchors:
         Anchor DataFrame, dict, list, or BED file path.
     flank:
@@ -365,7 +342,7 @@ def to_matrix(
     return mat
 
 
-@dataclass
+@dataclass(repr=False)
 class CutSiteFootprint:
     """1-bp resolution cleavage cut-site footprint around genomic anchors.
 
@@ -380,11 +357,11 @@ class CutSiteFootprint:
     minus:
         Optional 1D aggregate ``-`` / antisense-strand cut-site signal.
     matrix_combined:
-        Optional per-anchor :class:`SignalMatrix` for combined cuts.
+        Optional per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] for combined cuts.
     matrix_plus:
-        Optional per-anchor :class:`SignalMatrix` for ``+`` cuts.
+        Optional per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] for ``+`` cuts.
     matrix_minus:
-        Optional per-anchor :class:`SignalMatrix` for ``-`` cuts.
+        Optional per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] for ``-`` cuts.
     n_anchors:
         Number of anchors aggregated.
     agg:
@@ -400,6 +377,14 @@ class CutSiteFootprint:
     matrix_minus: SignalMatrix | None = None
     n_anchors: int = 0
     agg: str = "mean"
+
+    def __repr__(self) -> str:
+        span = f"[{self.pos[0]:g}, {self.pos[-1]:g}]" if len(self.pos) else "[]"
+        return (
+            f"CutSiteFootprint(pos={span} bp, n_bins={len(self.pos)}, n_anchors={self.n_anchors}, "
+            f"split_strands={self.plus is not None}, agg={self.agg!r}, "
+            f"has_matrices={self.matrix_combined is not None})"
+        )
 
     def to_dataframe(self) -> pd.DataFrame:
         """Export cut-site footprint to a tidy DataFrame (``pos``, ``strand``, ``signal``)."""
@@ -443,7 +428,7 @@ def cut_site_footprint(
     Parameters
     ----------
     store:
-        :class:`~pyvplot.store.FragmentStore` to query.
+        [`FragmentStore`][pyvplot.FragmentStore] to query.
     anchors:
         Anchor table (DataFrame, dict, or BED path).
     flank:
@@ -461,8 +446,8 @@ def cut_site_footprint(
     agg:
         Aggregation across anchors: ``"mean"`` (default) or ``"sum"``.
     keep_matrices:
-        Whether to retain the per-anchor :class:`SignalMatrix` objects on the
-        returned :class:`CutSiteFootprint`.
+        Whether to retain the per-anchor [`SignalMatrix`][pyvplot.SignalMatrix] objects on the
+        returned [`CutSiteFootprint`][pyvplot.CutSiteFootprint].
     """
     if agg not in {"mean", "sum"}:
         raise ValueError(f"Invalid agg {agg!r}; expected 'mean' or 'sum'.")
@@ -580,7 +565,7 @@ def footprint_score(
     shoulders ``[-motif_half_width - flank_width, -motif_half_width)`` and
     ``[+motif_half_width, +motif_half_width + flank_width)``.
 
-    Returns a :class:`pandas.DataFrame` indexed by anchor ID with columns:
+    Returns a `pandas.DataFrame` indexed by anchor ID with columns:
     - ``center_cuts``: sum of signal in the motif center window
     - ``flank_cuts``: sum of signal in both flanking windows
     - ``center_density``: per-bp density in motif center

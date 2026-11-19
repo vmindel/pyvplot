@@ -1,35 +1,30 @@
 # pyvplot
 
-Fast, assay-aware Python toolkit for **paired-end fragment geometry, V-plots, 1-bp cleavage cut-site footprints, size-stratified signal matrices, and nucleosome phasing** tailored to **ChEC-seq, ATAC-seq, CUT&RUN / CUT&Tag, MNase-seq, and ChIP-exo**.
+pyvplot summarises paired-end fragments around genomic anchors (motif hits, TSSs, peak summits) by position and fragment length. It is built for assays where fragment length carries the biology: ChEC-seq and MNase-seq, where TF-protected particles are short and nucleosomes about 150 bp; ATAC-seq; CUT&RUN and CUT&Tag; and ChIP-exo.
 
 ![WT ChEC-seq V-plot and Mutant vs. WT Differential V-plot](img/vplot_hero.png)
 
-## Core Principles
+## What it does
 
-- **Extract once, analyze everything:** Convert BAM, BED/BEDPE, or 10x/ArchR `.frag.tsv.gz` files into a compact, sorted per-chromosome [`FragmentStore`](api/store.md) (`.npz` or `.parquet`). Repeated queries across 10k–100k motif hits (`moodspy`) or TSSs run in milliseconds via binary search + Numba (`@njit(parallel=True)`), with an exact pure-NumPy fallback.
-- **Assay physics built in:** Explicit presets for Tn5 shifts (`+4 / -5`), MNase/ChEC cleavage ends, fragment midpoints, strand-separated ChIP-exo 5' ends, and exact 5'→3' strand flipping around `-` strand motifs and TSSs.
-- **Clean downstream handoffs:**
-  - Tidy DataFrames and `plotnine` / `matplotlib` helpers for single, differential, and faceted multi-condition V-plots.
-  - Size-stratified `(n_anchors, n_bins)` [`SignalMatrix`](api/matrices.md) objects ready for `EnrichedHeatmap` (`NormalizedMatrix.from_array(...)` or duck-typed dict).
-  - Track export to `bedGraph`, `BigWig`, and `pymisha` (sparse/dense).
+- **V-plots and differential V-plots**: fragment counts by length and position relative to the anchor, with normalisations that put short TF-sized fragments on the same scale as nucleosomes, and log2 fold change between conditions.
+- **Footprints**: base-resolution cleavage profiles split by fragment end, and a per-anchor protection score from centre and flank cut density.
+- **Size-selected matrices**: anchors × bins for one fragment class (`len_range="tf"`), with a built-in heatmap (`mat.plot()`) and plain array export for clustering.
+- **QC and phasing**: insert-size distribution, size-class fractions, FRiP, phasogram and nucleosome repeat length.
+- **Tracks**: size-selected midpoint, cut or coverage tracks to bedGraph, BigWig or a misha database (via `pymisha`).
+- **Sequence bias**: k-mer cleavage bias from a naked-DNA control, and correction of 1-bp cut matrices.
 
-## Built-in Assay Presets
+## How to read these docs
 
-| Preset | Endpoint Shift | Default `feature` | Default Size Bins |
-| :--- | :--- | :--- | :--- |
-| `chec` | `(0, 0)` | `cuts` | `tf`: `20–120`, `mononucleosome`: `130–200` |
-| `atac` | `(+4, -5)` | `cuts` | `nfr`: `10–100`, `mononucleosome`: `180–247`, `dinucleosome`: `315–473` |
-| `mnase` | `(0, 0)` | `midpoint` | `subnucleosome`: `20–120`, `nucleosome`: `135–165` |
-| `cutrun` | `(0, 0)` | `midpoint` | `short`: `20–120`, `nucleosome`: `150–200` |
-| `cuttag` | `(0, 0)` | `cuts` | `short`: `20–120`, `nucleosome`: `150–200` |
-| `chip_exo` | `(0, 0)` | `cuts_stranded` | Single-end stranded 5' stop sites |
+1. [Installation](installation.md).
+2. [How pyvplot works](concepts.md): the six decisions every analysis makes, with the conventions for coordinates, strand, length ranges and normalisation. Most surprising results trace back to one of them.
+3. [Quick start](tutorials/quickstart.md) on simulated data (`vp.datasets.simulate_chec()`), then [your own data](tutorials/your-data.md): BAM to figures, including a script for a cluster job.
+4. Topic tutorials, then the API reference for argument-level detail.
 
-## Where to Go Next
+```python
+import pyvplot as vp
 
-- [Installation](installation.md) — core package and optional extras (`numba`, `bam`, `io`, `plot`, `bigwig`).
-- [Quick start](tutorials/quickstart.md) — build a `FragmentStore`, compute a V-plot, and extract matrices.
-- [V-plots & differential V-plots](tutorials/vplots-and-diff.md) — CPM & expected/background normalization, smoothing, `diff()`, and faceted `VPlotCollection`.
-- [Matrices & cut-site footprints](tutorials/matrices-and-footprints.md) — size-stratified `EnrichedHeatmap` handoffs, 1-bp `+`/`-` footprints, and motif protection scores.
-- [Fragment QC & nucleosome phasing](tutorials/qc-and-phasing.md) — insert-size distributions, FRiP, phasograms, and NRL estimation.
-- [Cleavage bias & track export](tutorials/bias-and-export.md) — empirical k-mer bias modeling and bedGraph / BigWig / `pymisha` export.
-- [Claude Code skill](claude-skill.md) — install the bundled Agent Skill so Claude Code uses `pyvplot` idiomatically.
+store = vp.FragmentStore.from_bam("chec.bam", assay="chec")
+store.save("chec.frags.npz")
+v = store.vplot("motifs.bed", flank=300, min_len=20, max_len=250, pos_bin=5, len_bin=5)
+v.normalize("expected").plot()
+```

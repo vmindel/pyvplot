@@ -19,13 +19,22 @@ mat_cut = frags.to_matrix(anchors, flank=100,  bin_size=1,  feature="cuts",     
 - `.to_dataframe()` — tidy DataFrame (`anchor`, `pos`, `value`)
 - Duck-typed dict access (`mat["values"]`, `mat["region_index"]`, `mat["upstream"]`, `mat["downstream"]`, `mat["bin_size"]`) and `np.asarray(mat)`.
 
-## Handoff to `EnrichedHeatmap`
+## Heatmaps
+
+pyvplot plots its own heatmaps and depends on no heatmap package.
 
 ```python
-# Calls NormalizedMatrix.from_array(...) if EnrichedHeatmap is installed,
-# otherwise returns the duck-typed dict {"values", "region_index", "upstream", "downstream", "bin_size"}
-eh_mat = mat_tf.normalize("cpm").to_enriched_heatmap(name="TF_midpoints")
+# One row per anchor, mean profile (with 95% CI band) on top, colour scale 0..99th percentile.
+fig, (ax_prof, ax_heat) = mat_tf.normalize("cpm").plot()           # order="mean" (default): strongest rows on top
+mat_tf.plot(order=np.argsort(-scores["protection_score"].to_numpy()))   # any row order, or a subset of rows
+mat_tf.normalize("row_zscore").plot()                               # negative values -> RdBu_r centred on 0
+p = mat_tf.plot_plotnine()                                          # geom_raster; slow beyond ~1e6 cells
+
+# Plain-dict export for any other tool (no pyvplot import needed on the other side)
+d = mat_tf.to_dict()   # values, region_index, upstream, downstream, bin_size
 ```
+
+`to_enriched_heatmap()` was removed; it never found a package to hand off to.
 
 ## 1-bp Cleavage Cut-Site Footprints
 
