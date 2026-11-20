@@ -26,6 +26,7 @@ from pyvplot.extract import (
     extract_events,
     normalize_anchors,
 )
+from pyvplot.locus import LocusVPlot, locus_vplot
 from pyvplot.matrices import (
     CutSiteFootprint,
     SignalMatrix,
@@ -54,6 +55,7 @@ __all__ = [
     "FragmentStore",
     "HAS_NUMBA",
     "KmerBiasTable",
+    "LocusVPlot",
     "NormalizedAnchors",
     "PhasogramResult",
     "SignalMatrix",
@@ -68,6 +70,7 @@ __all__ = [
     "get_assay",
     "insert_size_distribution",
     "list_assays",
+    "locus_vplot",
     "normalize_anchors",
     "normalize_by_control",
     "phasogram",

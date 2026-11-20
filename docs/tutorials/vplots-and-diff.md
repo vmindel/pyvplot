@@ -88,6 +88,39 @@ print(f"most common length within 20 bp of the site: {lens.loc[lens['value'].idx
 most common length within 20 bp of the site: 67.5 bp
 ```
 
+## One locus: every fragment, or one motif
+
+The aggregate functions sum over anchors. `locus_vplot` keeps one window unaggregated: each fragment is a point at (position, length). Without a motif it shows the whole window in genomic coordinates; with a motif it is centred on it, and `feature="cuts"` labels each end `proximal` (nearer the motif centre) or `distal`.
+
+```python
+site = anchors.iloc[3]
+c = int(site["center"])
+lv = wt.locus_vplot(
+    f"chr1:{c - 400}-{c + 400}",
+    motif=f"chr1:{c - 10}-{c + 10}:{site['strand']}",
+    feature="cuts",
+    len_range="tf",
+)
+print(lv)
+print(lv.points.groupby("end", observed=True)["x"].agg(["size", "median"]).round(1))
+```
+
+```text
+LocusVPlot(chr1:7170-7970, motif=7560-7580(-), feature='cuts', coords='relative', n_fragments=40, n_points=80)
+          size  median
+end
+proximal    40    -1.0
+distal      40    -1.0
+```
+
+```py
+fig, ax = lv.plot(color_by="end")          # points + shaded motif; color_by="motif_overlap" also works
+lv.to_vplot(pos_bin=5, len_bin=5).plot()   # the same points binned as a V-plot (n_anchors=1)
+wt.locus_vplot("chr1:7170-7970").plot()    # no motif: midpoints, genomic x axis
+```
+
+Regions and motifs are 0-based and half-open (BED), not UCSC's 1-based `chr1:1,001-2,000`. `motif_overlap="any"|"full"|"none"` keeps fragments that touch, contain or miss the motif.
+
 ## Several conditions in one figure
 
 `VPlotCollection` stacks labelled V-plots into one tidy table for faceting:
