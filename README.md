@@ -39,6 +39,9 @@ scores = store.footprint_score("motifs.bed", len_range="tf")
 # One heatmap row per motif, strongest first, with the mean profile on top.
 store.to_matrix("motifs.bed", flank=500, bin_size=10, feature="midpoint", len_range="tf").plot()
 
+# One locus, unaggregated: every fragment end, labelled near/far from the motif in the window.
+store.locus_vplot("chr1:7170-7970", motif="chr1:7560-7580:+", feature="cuts").plot()
+
 # Mutant vs WT, log2 fold change after CPM.
 v_ko = vp.FragmentStore.load("ko.frags.npz").vplot("motifs.bed", flank=300, pos_bin=5, len_bin=5)
 v_ko.diff(v).plot()

@@ -14,6 +14,7 @@ PAIRS = [
     "cut_site_footprint",
     "footprint_score",
     "extract_events",
+    "locus_vplot",
     "insert_size_distribution",
     "phasogram",
     "frip",

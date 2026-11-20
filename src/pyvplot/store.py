@@ -15,6 +15,7 @@ import pandas as pd
 from pyvplot.assays import AssayConfig, get_assay
 
 if TYPE_CHECKING:
+    from pyvplot.locus import LocusVPlot
     from pyvplot.matrices import CutSiteFootprint, SignalMatrix
     from pyvplot.qc import PhasogramResult
     from pyvplot.vplot import VPlot
@@ -985,6 +986,24 @@ class FragmentStore:
             self, anchors, flank=flank, upstream=upstream, downstream=downstream,
             min_len=min_len, max_len=max_len, pos_bin=pos_bin, len_bin=len_bin,
             feature=feature, motif_overlap=motif_overlap, use_numba=use_numba,
+        )
+
+    def locus_vplot(
+        self,
+        region: Any,
+        motif: Any = None,
+        feature: str = "midpoint",
+        len_range: tuple[int, int] | str | None = None,
+        motif_overlap: str | None = None,
+        coords: str | None = None,
+        orient: bool = True,
+    ) -> LocusVPlot:
+        """Fragments in one window. Same as [`pyvplot.locus_vplot`][pyvplot.locus_vplot] with this store."""
+        from pyvplot.locus import locus_vplot
+
+        return locus_vplot(
+            self, region, motif=motif, feature=feature, len_range=len_range,
+            motif_overlap=motif_overlap, coords=coords, orient=orient,
         )
 
     def to_matrix(

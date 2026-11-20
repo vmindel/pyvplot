@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
+    from pyvplot.locus import LocusVPlot
     from pyvplot.matrices import CutSiteFootprint, SignalMatrix
     from pyvplot.qc import PhasogramResult
     from pyvplot.store import FragmentStore
@@ -603,3 +604,101 @@ def plot_signal_matrix_plotnine(
         + p9.theme_minimal()
         + p9.theme(axis_text_y=p9.element_blank(), panel_grid=p9.element_blank())
     )
+
+
+_LOCUS_COLORS = {
+    "midpoint": "#2c3e50",
+    "proximal": "#1b7837",
+    "distal": "#762a83",
+    "left": "#d73027",
+    "right": "#4575b4",
+}
+
+
+def _locus_labels(lv: LocusVPlot) -> tuple[str, str]:
+    if lv.coords == "genomic":
+        return f"{lv.chrom} position (bp)", "Fragment length (bp)"
+    ref = "motif" if lv.motif is not None else "window centre"
+    return f"Distance from {ref} centre (bp)", "Fragment length (bp)"
+
+
+def plot_locus_matplotlib(
+    lv: LocusVPlot,
+    ax: Any = None,
+    color_by: str | None = "end",
+    size: float = 8.0,
+    alpha: float = 0.6,
+    title: str | None = None,
+    motif_color: str = "#f2c14e",
+    figsize: tuple[float, float] = (8.0, 4.0),
+) -> tuple[Any, Any]:
+    """Scatter of a [`LocusVPlot`][pyvplot.LocusVPlot] with ``matplotlib``; the motif is shaded.
+
+    ``color_by`` is ``"end"`` (proximal/distal, left/right or midpoint), ``"motif_overlap"``
+    or ``None`` for a single colour. Returns ``(fig, ax)``.
+    """
+    plt = _require_matplotlib()
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    span = lv.motif_span
+    if span is not None:
+        ax.axvspan(span[0], span[1], color=motif_color, alpha=0.35, linewidth=0, label="motif", zorder=0)
+
+    pts = lv.points
+    if color_by is None or len(pts) == 0:
+        ax.scatter(pts["x"], pts["frag_len"], s=size, alpha=alpha, color=_LOCUS_COLORS["midpoint"], linewidths=0)
+    elif color_by in {"end", "motif_overlap"}:
+        palette = _LOCUS_COLORS if color_by == "end" else {"full": "#b2182b", "partial": "#ef8a62", "none": "#999999"}
+        for level in pts[color_by].cat.categories:
+            sub = pts[pts[color_by] == level]
+            if len(sub):
+                ax.scatter(sub["x"], sub["frag_len"], s=size, alpha=alpha, color=palette[level], linewidths=0, label=str(level))
+    else:
+        raise ValueError(f"color_by must be 'end', 'motif_overlap' or None, got {color_by!r}.")
+
+    ax.set_xlim(*lv.xlim)
+    xlabel, ylabel = _locus_labels(lv)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title if title is not None else f"{lv.chrom}:{lv.start}-{lv.end} ({lv.feature})")
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(frameon=False, fontsize=8, markerscale=2)
+    return fig, ax
+
+
+def plot_locus_plotnine(
+    lv: LocusVPlot,
+    color_by: str | None = "end",
+    size: float = 1.2,
+    alpha: float = 0.6,
+    title: str | None = None,
+) -> Any:
+    """Scatter of a [`LocusVPlot`][pyvplot.LocusVPlot] with ``plotnine``; the motif is shaded."""
+    p9 = _require_plotnine()
+    if color_by not in {"end", "motif_overlap", None}:
+        raise ValueError(f"color_by must be 'end', 'motif_overlap' or None, got {color_by!r}.")
+    xlabel, ylabel = _locus_labels(lv)
+    aes = p9.aes(x="x", y="frag_len", color=color_by) if color_by else p9.aes(x="x", y="frag_len")
+    p = p9.ggplot(lv.points, aes)
+    span = lv.motif_span
+    if span is not None:
+        import pandas as pd
+
+        band = pd.DataFrame({"xmin": [span[0]], "xmax": [span[1]], "ymin": [-np.inf], "ymax": [np.inf]})
+        p = p + p9.geom_rect(
+            p9.aes(xmin="xmin", xmax="xmax", ymin="ymin", ymax="ymax"),
+            data=band, inherit_aes=False, fill="#f2c14e", alpha=0.35,
+        )
+    p = (
+        p
+        + p9.geom_point(size=size, alpha=alpha, stroke=0)
+        + p9.coord_cartesian(xlim=lv.xlim)
+        + p9.labs(x=xlabel, y=ylabel, title=title if title is not None else f"{lv.chrom}:{lv.start}-{lv.end} ({lv.feature})")
+        + p9.theme_minimal()
+    )
+    if color_by == "end":
+        p = p + p9.scale_color_manual(values=_LOCUS_COLORS)
+    return p
