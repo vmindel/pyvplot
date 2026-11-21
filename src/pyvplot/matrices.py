@@ -160,6 +160,12 @@ class SignalMatrix:
         m = method.lower()
         arr = self.values
 
+        if not self.normalization.startswith("raw"):
+            raise ValueError(
+                f"This matrix is already normalised ({self.normalization!r}); normalising it again "
+                f"with {method!r} would compound the scaling. Call normalize() on the raw matrix."
+            )
+
         if m == "cpm":
             denom = max(1e-12, float(self.n_fragments) / 1e6) if self.n_fragments > 0 else 1.0
             out = arr / denom
@@ -199,6 +205,20 @@ class SignalMatrix:
             metadata=dict(self.metadata),
             motif_overlap=self.motif_overlap,
         )
+
+    def raw_count_scale(self) -> float | None:
+        """Value of one raw count in this matrix's current units, or ``None`` if unknown.
+
+        Known for raw (including bias-corrected raw), ``cpm`` and ``rpkm`` matrices.
+        """
+        if self.normalization.startswith("raw"):
+            return 1.0
+        per_million = float(self.n_fragments) / 1e6 if self.n_fragments > 0 else 1.0
+        if self.normalization == "cpm":
+            return 1.0 / per_million
+        if self.normalization == "rpkm":
+            return 1.0 / (per_million * float(self.bin_size) / 1000.0)
+        return None
 
     def subset(self, indices: Any) -> SignalMatrix:
         """Return a new [`SignalMatrix`][pyvplot.SignalMatrix] restricted to selected anchor rows."""
@@ -486,8 +506,9 @@ def cut_site_footprint(
         Optional fragment-length filter or named assay size bin.
     split_strands:
         If ``True`` (default), extract the two ends separately as well as
-        their sum, as chosen by ``split_by``. ``False`` gives the combined
-        profile only.
+        their sum, as chosen by ``split_by`` (despite the name, this covers the
+        proximity split too). ``False`` gives the combined profile only and
+        cannot be combined with ``split_by="proximity"``.
     normalize:
         Optional normalization (e.g., ``"cpm"``) applied to each matrix prior
         to aggregation.
@@ -511,6 +532,12 @@ def cut_site_footprint(
         raise ValueError(f"Invalid agg {agg!r}; expected 'mean' or 'sum'.")
     if split_by not in {"strand", "proximity"}:
         raise ValueError(f"Invalid split_by {split_by!r}; expected 'strand' or 'proximity'.")
+
+    if not split_strands and split_by != "strand":
+        raise ValueError(
+            f"split_by={split_by!r} needs split_strands=True; with split_strands=False only "
+            "the combined profile is computed."
+        )
 
     reducer = np.mean if agg == "mean" else np.sum
 

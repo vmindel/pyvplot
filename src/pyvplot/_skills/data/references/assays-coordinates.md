@@ -45,7 +45,7 @@ mat = vp.to_matrix(frags, tss_anchors, upstream=1000, downstream=500, bin_size=1
 
 # Compact per-fragment event table for custom analysis
 events = vp.extract_events(frags, anchors, flank=200, len_range=(20, 120), overlap_mode="midpoint")  # or len_range="tf"
-# Columns: anchor_idx, rel_mid, rel_left, rel_right, frag_len, then either
+# Columns: anchor_idx, anchor (the anchor's index label), rel_mid, rel_left, rel_right, frag_len, then either
 #   rel_proximal, rel_distal, motif_overlap ('full'/'partial'/'none')   (paired-end stores), or
 #   frag_strand                                                         (stranded stores, chip_exo)
 near = vp.extract_events(frags, motifs, flank=200, len_range="tf", motif_overlap="any")  # filter on the motif interval

@@ -313,3 +313,25 @@ def test_vplot_records_filter_and_guards_diff_and_normalize():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         store.vplot(anchors, motif_overlap="none", **kw).normalize("cpm")
+
+
+def test_extract_events_labels_anchors_by_index():
+    import pandas as pd
+
+    import pyvplot as vp
+
+    store = vp.FragmentStore.from_arrays({"chr1": np.array([90, 190])}, {"chr1": np.array([110, 210])})
+    anchors = pd.DataFrame({"chrom": ["chr1", "chr1"], "center": [100, 200]}, index=["motifA", "motifB"])
+    ev = store.extract_events(anchors, flank=50)
+    assert ev["anchor_idx"].tolist() == [0, 1]
+    assert ev["anchor"].tolist() == ["motifA", "motifB"]
+    assert "anchor" in store.extract_events(anchors.iloc[:0], flank=50).columns
+
+
+def test_split_by_proximity_requires_split_strands():
+    import pyvplot as vp
+
+    store, anchors = vp.datasets.simulate_chec(n_sites=5)
+    with pytest.raises(ValueError, match="needs split_strands=True"):
+        store.cut_site_footprint(anchors, split_strands=False, split_by="proximity")
+    assert store.cut_site_footprint(anchors, split_strands=False).split_by is None

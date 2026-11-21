@@ -20,8 +20,8 @@ def _gaussian_filter_2d(
     mode: str = "nearest",
 ) -> np.ndarray:
     """Apply 2D Gaussian smoothing via SciPy, with a pure-NumPy separable fallback."""
-    if isinstance(sigma, (int, float)):
-        sy = sx = float(sigma)
+    if np.ndim(sigma) == 0:
+        sy = sx = float(sigma)  # type: ignore[arg-type]
     else:
         sy, sx = float(sigma[0]), float(sigma[1])
 
@@ -204,6 +204,9 @@ class VPlot:
     ) -> VPlot:
         """Return a normalized copy of this V-plot.
 
+        Only a raw V-plot can be normalised: calling this on one that already is
+        (``normalization != "raw"``) raises ``ValueError`` instead of compounding the scaling.
+
         Parameters
         ----------
         method:
@@ -228,6 +231,12 @@ class VPlot:
         """
         m = method.lower()
         arr = self.counts
+
+        if self.normalization != "raw":
+            raise ValueError(
+                f"This V-plot is already normalised ({self.normalization!r}); normalising it again "
+                f"with {method!r} would compound the scaling. Call normalize() on the raw V-plot."
+            )
 
         if m == "cpm":
             frag_scale = float(self.n_fragments) / 1e6 if self.n_fragments > 0 else 1.0
@@ -350,6 +359,8 @@ class VPlot:
         normalize_first:
             If both V-plots are ``"raw"`` and ``normalize_first`` is not ``None``,
             normalize both using this method before differencing (default ``"cpm"``).
+            V-plots that are already normalised must share the same normalisation,
+            otherwise a ``ValueError`` is raised.
         smooth_before:
             If ``True`` (default), smooth both V-plots before computing the
             differential; if ``False``, smooth the resulting difference map.
@@ -367,6 +378,11 @@ class VPlot:
 
         a = self
         b = other
+        if a.normalization != b.normalization:
+            raise ValueError(
+                f"Cannot diff V-plots in different units: {a.normalization!r} vs {b.normalization!r}. "
+                "Normalise both the same way first (or pass two raw V-plots and normalize_first)."
+            )
         if normalize_first is not None and a.normalization == "raw" and b.normalization == "raw":
             a = a.normalize(normalize_first)
             b = b.normalize(normalize_first)

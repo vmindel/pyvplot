@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from pyvplot.assays import resolve_len_range
-from pyvplot.store import FragmentStore
+from pyvplot.store import FragmentStore, parse_int_columns
 
 try:
     from numba import get_num_threads, njit, prange
@@ -187,8 +187,7 @@ def _read_anchors_bed(path: Path) -> pd.DataFrame:
             if len(parts) < 3:
                 continue
             chrom = parts[0]
-            start = int(parts[1])
-            end = int(parts[2])
+            start, end = parse_int_columns(parts, (1, 2), path, idx + 1)
             center = 0.5 * (start + end)
             name = parts[3] if len(parts) >= 4 and parts[3] not in {"+", "-", "."} else str(idx)
             strand = "+"
@@ -1225,9 +1224,9 @@ def accumulate_matrix(
 def extract_events(
     store: FragmentStore,
     anchors: Any,
-    flank: int = 300,
-    upstream: int | None = None,
-    downstream: int | None = None,
+    flank: float = 300,
+    upstream: float | None = None,
+    downstream: float | None = None,
     len_range: tuple[int, int] | str | None = None,
     overlap_mode: str = "midpoint",
     motif_overlap: str | None = None,
@@ -1264,7 +1263,8 @@ def extract_events(
     Returns
     -------
     pandas.DataFrame
-        Columns: ``anchor_idx``, ``rel_mid``, ``rel_left``, ``rel_right``,
+        Columns: ``anchor_idx`` (row position in ``anchors``), ``anchor`` (that anchor's
+        index label, e.g. the BED name), ``rel_mid``, ``rel_left``, ``rel_right``,
         ``frag_len``. Unstranded stores add ``rel_proximal`` / ``rel_distal``
         (the end nearer to / farther from the anchor centre; ties go to
         ``rel_left``) and ``motif_overlap`` (``"full"``, ``"partial"`` or
@@ -1377,8 +1377,10 @@ def extract_events(
     if not a_idxs_list:
         return pd.DataFrame(columns=_event_columns(store.is_stranded))
 
+    anchor_idx = np.concatenate(a_idxs_list)
     data: dict[str, Any] = {
-        "anchor_idx": np.concatenate(a_idxs_list),
+        "anchor_idx": anchor_idx,
+        "anchor": norm.region_index[anchor_idx],
         "rel_mid": np.concatenate(rel_mid_list),
         "rel_left": np.concatenate(rel_left_list),
         "rel_right": np.concatenate(rel_right_list),
@@ -1398,7 +1400,7 @@ def extract_events(
 
 
 def _event_columns(is_stranded: bool) -> list[str]:
-    cols = ["anchor_idx", "rel_mid", "rel_left", "rel_right", "frag_len"]
+    cols = ["anchor_idx", "anchor", "rel_mid", "rel_left", "rel_right", "frag_len"]
     if is_stranded:
         return [*cols, "frag_strand"]
     return [*cols, "rel_proximal", "rel_distal", "motif_overlap"]

@@ -316,7 +316,7 @@ def make_bias_figure() -> None:
         upstream=40,
         downstream=40,
         bin_size=1,
-        feature="cuts",
+        feature="cuts_plus",
     )
     corrected = bias.correct_matrix(mat, [seq_str], preserve_scale=True)
 

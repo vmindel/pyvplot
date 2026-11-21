@@ -76,26 +76,25 @@ ggplot(v, aes(pos, length, fill = value)) + geom_raster() + scale_fill_viridis_c
 
 ## 4. The same as a cluster script
 
-[`examples/bam_to_vplot.py`](https://github.com/vmindel/pyvplot/blob/main/examples/bam_to_vplot.py) runs steps 1 to 3 for one sample. It reuses the `.frags.npz` cache when that is newer than the BAM, so re-running with different plotting choices skips ingestion. It is tested end to end on a simulated BAM.
+The `pyvplot-report` command (source below, also runnable as [`examples/bam_to_vplot.py`](https://github.com/vmindel/pyvplot/blob/main/examples/bam_to_vplot.py)) runs steps 1 to 3 for one sample. It reuses the `.frags.npz` cache when that is newer than the BAM, so re-running with different plotting choices skips ingestion. It is tested end to end on a simulated BAM.
 
 ```bash
-python examples/bam_to_vplot.py --bam chec.bam --motifs motifs.bed --out results/chec
+pyvplot-report --bam chec.bam --motifs motifs.bed --out results/chec
 ```
 
 On LSF:
 
 ```bash
 bsub -J vplot -n 4 -R "rusage[mem=8000]" -o logs/%J.out \
-  python examples/bam_to_vplot.py --bam chec.bam --motifs motifs.bed --out results/chec
+  pyvplot-report --bam chec.bam --motifs motifs.bed --out results/chec
 ```
 
-Ingestion is one Python pass over the BAM. On a synthetic BAM it read 1 M read pairs in 1.4 s, with peak memory about 110 bytes per fragment above the interpreter's own ~150 MB. Real BAMs, with tags and unpaired reads, will be slower. As a rule of thumb, 30 M pairs need about 3.5 GB while reading and well under 1 GB afterwards. The analysis steps are seconds. Only Numba uses the extra cores (`-n 4`).
+Ingestion is one Python pass over the BAM. On a synthetic BAM it read 1 M read pairs in 1.5 s (1.1 s with `--threads 4`, which only parallelises BGZF decompression), with peak memory about 35 bytes per fragment above the interpreter's own ~175 MB. Real BAMs, with tags and unpaired reads, will be slower. As a rule of thumb, 30 M pairs need about 1 GB while reading. The analysis steps are seconds. Only Numba uses the extra cores (`-n 4`).
 
 ```py
-#!/usr/bin/env python
 """BAM + motif BED -> cached fragment store, QC, V-plot, cut-site footprint, per-motif scores.
 
-    python bam_to_vplot.py --bam sample.bam --motifs motifs.bed --out results/sample
+    pyvplot-report --bam sample.bam --motifs motifs.bed --out results/sample
 
 Outputs (all prefixed by --out):
     .frags.npz             fragment store; reused if newer than the BAM and built with the same settings
@@ -114,11 +113,6 @@ import argparse
 import json
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")  # no display on cluster nodes
-import matplotlib.pyplot as plt
-
 import pyvplot as vp
 
 
@@ -132,6 +126,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--min-mapq", type=int, default=20)
     p.add_argument("--exclude-chroms", nargs="*", default=["chrM", "MT"])
     p.add_argument("--dedup", action="store_true", help="drop SAM-flagged duplicates")
+    p.add_argument("--threads", type=int, default=1, help="BAM decompression threads")
     return p.parse_args(argv)
 
 
@@ -157,6 +152,7 @@ def load_store(args: argparse.Namespace) -> vp.FragmentStore:
         min_mapq=args.min_mapq,
         exclude_chroms=args.exclude_chroms,
         dedup="flag" if args.dedup else False,
+        threads=args.threads,
     )
     store.metadata["ingest_settings"] = settings
     store.save(cache)
@@ -164,6 +160,11 @@ def load_store(args: argparse.Namespace) -> vp.FragmentStore:
 
 
 def main(argv: list[str] | None = None) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")  # no display on cluster nodes
+    import matplotlib.pyplot as plt
+
     args = parse_args(argv)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     prefix = str(args.out)

@@ -26,10 +26,10 @@ mat_corr = bias.correct_matrix(mat_cut, anchor_seqs, strands=anchor_strands, pre
 
 ## Control-Track Normalization
 
-Divide or subtract a matched control (naked DNA, free MNase, IgG) on a `vp.SignalMatrix`, `vp.VPlot`, or NumPy array:
+Divide or subtract a matched control (naked DNA, free MNase, IgG) on a `vp.SignalMatrix`, `vp.VPlot`, or NumPy array. Both inputs must be in the same units. The default pseudocount is half a raw count in those units, so CPM-scaled inputs are not swamped; an explicit `pseudocount=1.0` is only sensible for raw counts:
 
 ```python
-mat_norm = vp.normalize_by_control(mat_signal, mat_control, mode="log2fc", pseudocount=1.0)
+mat_norm = vp.normalize_by_control(mat_signal, mat_control, mode="log2fc")
 ```
 
 ## Exporting Tracks (`bedGraph`, `BigWig`, `pymisha`)

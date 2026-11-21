@@ -638,6 +638,8 @@ def plot_locus_matplotlib(
     or ``None`` for a single colour. Returns ``(fig, ax)``.
     """
     plt = _require_matplotlib()
+    if color_by == "motif_overlap" and lv.motif is None:
+        raise ValueError("color_by='motif_overlap' needs a motif; pass motif=... to locus_vplot.")
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
     else:
@@ -680,6 +682,8 @@ def plot_locus_plotnine(
     p9 = _require_plotnine()
     if color_by not in {"end", "motif_overlap", None}:
         raise ValueError(f"color_by must be 'end', 'motif_overlap' or None, got {color_by!r}.")
+    if color_by == "motif_overlap" and lv.motif is None:
+        raise ValueError("color_by='motif_overlap' needs a motif; pass motif=... to locus_vplot.")
     xlabel, ylabel = _locus_labels(lv)
     aes = p9.aes(x="x", y="frag_len", color=color_by) if color_by else p9.aes(x="x", y="frag_len")
     p = p9.ggplot(lv.points, aes)

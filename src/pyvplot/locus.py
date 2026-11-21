@@ -55,7 +55,7 @@ class LocusVPlot:
         One row per plotted point: ``x`` (plot coordinate), ``pos`` (genomic
         coordinate, 0-based), ``frag_len``, ``end`` (``"midpoint"``, ``"left"`` /
         ``"right"``, or with a motif ``"proximal"`` / ``"distal"``) and ``motif_overlap``
-        (``"full"``, ``"partial"`` or ``"none"``, per fragment).
+        (``"full"``, ``"partial"`` or ``"none"``, per fragment; missing without a motif).
     chrom, start, end:
         The locus, 0-based half-open.
     motif:
@@ -83,6 +83,7 @@ class LocusVPlot:
     assay: str = "generic"
     motif_overlap: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    store_n_fragments: int = 0
 
     def __repr__(self) -> str:
         mt = "" if self.motif is None else f", motif={self.motif[0]}-{self.motif[1]}({self.motif_strand})"
@@ -120,7 +121,9 @@ class LocusVPlot:
         """Bin the points into a [`VPlot`][pyvplot.VPlot] over this window (``n_anchors=1``).
 
         The position axis is ``x``: genomic coordinates when ``coords="genomic"``, so pass
-        ``center_line=False`` and a matching ``xlabel`` when plotting it.
+        ``center_line=False`` and a matching ``xlabel`` when plotting it. The V-plot's
+        ``n_fragments`` is the whole store's, so ``normalize("cpm")`` is on the same scale as
+        the aggregate V-plots of that store.
         """
         from pyvplot.vplot import VPlot
 
@@ -139,7 +142,7 @@ class LocusVPlot:
             pos_edges=pos_edges,
             len_edges=len_edges,
             n_anchors=1,
-            n_fragments=self.n_fragments,
+            n_fragments=self.store_n_fragments or self.n_fragments,
             assay=self.assay,
             feature=self.feature,
             motif_overlap=self.motif_overlap,
@@ -283,6 +286,9 @@ def locus_vplot(
             )
         pts = pd.concat(parts, ignore_index=True)
         pts["end"] = pd.Categorical(pts["end"], categories=[lab for _, lab in cols])
+        if not has_motif:
+            # Overlap with the whole window says nothing about a motif.
+            pts["motif_overlap"] = np.nan
         pts["motif_overlap"] = pd.Categorical(pts["motif_overlap"], categories=["full", "partial", "none"])
 
     xlim = (float(L), float(R)) if coords == "genomic" else (float(rel_lo), float(rel_hi))
@@ -299,4 +305,5 @@ def locus_vplot(
         n_fragments=int(len(ev)),
         assay=store.assay.name,
         motif_overlap=motif_overlap,
+        store_n_fragments=store.n_fragments,
     )

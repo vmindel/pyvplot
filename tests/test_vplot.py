@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from pyvplot.store import FragmentStore
-from pyvplot.vplot import VPlotCollection, vplot
+from pyvplot.vplot import VPlot, VPlotCollection, vplot
 
 
 def _make_tf_and_nucleosome_store(
@@ -151,3 +151,45 @@ def test_vplot_marginals_tidy_and_collection():
     df = coll.to_dataframe()
     assert len(df) == 2 * vp2.counts.size
     assert {"pos", "length", "value", "tf", "condition"}.issubset(df.columns)
+
+
+@pytest.mark.parametrize("sigma", [np.int64(2), np.float32(1.5), (np.int64(1), np.float64(2.0))])
+def test_smooth_accepts_numpy_scalars(sigma):
+    v = VPlot(
+        counts=np.random.default_rng(0).random((6, 8)),
+        pos_edges=np.arange(9.0),
+        len_edges=np.arange(7.0),
+        n_anchors=1,
+        n_fragments=1,
+    )
+    assert v.smooth(sigma=sigma).shape == (6, 8)
+
+
+def _raw_vplot(scale: float = 1.0, n_fragments: int = 2_000_000) -> VPlot:
+    counts = np.arange(1.0, 49.0).reshape(6, 8) * scale
+    return VPlot(
+        counts=counts, pos_edges=np.arange(9.0), len_edges=np.arange(7.0),
+        n_anchors=4, n_fragments=n_fragments,
+    )
+
+
+@pytest.mark.parametrize("method", ["cpm", "cpm_total", "per_anchor", "density"])
+def test_normalizing_a_normalized_vplot_raises(method: str):
+    normalized = _raw_vplot().normalize(method)
+    with pytest.raises(ValueError, match="already normalised"):
+        normalized.normalize("cpm")
+    # smoothing keeps the unit, and a raw smoothed V-plot can still be normalised
+    assert _raw_vplot().smooth(1.0).normalize(method).normalization == method
+
+
+def test_diff_rejects_mixed_units_but_accepts_matching_ones():
+    raw = _raw_vplot()
+    cpm = _raw_vplot().normalize("cpm")
+    with pytest.raises(ValueError, match="different units"):
+        raw.diff(cpm)
+    with pytest.raises(ValueError, match="different units"):
+        cpm.diff(raw)
+    with pytest.raises(ValueError, match="different units"):
+        cpm.diff(_raw_vplot().normalize("per_anchor"))
+    assert cpm.diff(_raw_vplot(2.0).normalize("cpm")).is_diff
+    assert raw.diff(_raw_vplot(2.0)).is_diff  # two raw V-plots are normalised to CPM first

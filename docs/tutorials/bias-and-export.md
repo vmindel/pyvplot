@@ -40,10 +40,10 @@ print(f"Learned bias at GATC: {bias['GATC']:.2f}x (mean across 4-mers: {bias.wei
 ```
 
 ```text
-Learned bias at GATC: 54.28x (mean across 4-mers: 1.00x)
+Learned bias at GATC: 54.87x (mean across 4-mers: 1.00x)
 ```
 
-`correct_matrix` needs one sequence per anchor, oriented 5'→3' along the anchor (reverse-complemented for `-` anchors, or pass `strands=`). Each sequence must be either exactly `n_bins` long, or padded by `cut_offset` bases on the left and `k - 1 - cut_offset` on the right so edge cuts get a full k-mer. You extract these from the genome yourself; pyvplot does not yet do it for you. This toy example checks that correcting a profile equal to its own expectation flattens it:
+`correct_matrix` needs one sequence per anchor, oriented 5'→3' along the anchor (reverse-complemented for `-` anchors, or pass `strands=`). Each sequence must be either exactly `n_bins` long, or padded by `cut_offset` bases on the left and `k - 1 - cut_offset` on the right so edge cuts get a full k-mer. You extract these from the genome yourself; pyvplot does not yet do it for you. The expectation follows the matrix's `feature`: left-end cuts (`cuts_plus`) are scored on the forward strand, right-end cuts (`cuts_minus`) on the reverse strand, and a combined `cuts` matrix with the mean of the two. This toy example checks that correcting a left-end profile equal to its own expectation flattens it:
 
 ```python
 anchor_seq = "AAAAAAAA" + "GATC" + "AAAAAAAA"
@@ -54,14 +54,14 @@ raw_mat = vp.SignalMatrix(
     upstream=10,
     downstream=10,
     bin_size=1,
-    feature="cuts",
+    feature="cuts_plus",
 )
 corrected = bias.correct_matrix(raw_mat, [anchor_seq], preserve_scale=True)
 print(f"Std before correction: {raw_mat.values.std():.3f}, after correction: {corrected.values.std():.6f}")
 ```
 
 ```text
-Std before correction: 11.611, after correction: 0.000001
+Std before correction: 11.788, after correction: 0.000002
 ```
 
 Applying `KmerBiasTable.correct_matrix()` around a protected motif removes strong sequence-specific enzyme cleavage spikes while preserving the true underlying TF footprint:
