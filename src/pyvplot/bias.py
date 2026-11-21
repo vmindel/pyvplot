@@ -461,6 +461,11 @@ class KmerBiasTable:
     ) -> SignalMatrix:
         """Bias-correct a 1-bp [`SignalMatrix`][pyvplot.SignalMatrix] using anchor sequences.
 
+        The expectation follows ``signal_matrix.feature``: ``"cuts_plus"`` (left ends) is
+        scored on the forward strand, ``"cuts_minus"`` (right ends) on the reverse strand
+        and ``"cuts"`` as the mean of the two, since a combined matrix holds both kinds of
+        cut. Other features (midpoint, coverage, proximal/distal) are rejected.
+
         Parameters
         ----------
         signal_matrix:
@@ -472,11 +477,6 @@ class KmerBiasTable:
         strands:
             Optional per-anchor strands (``"+"`` / ``"-"``). If sequences are
             already oriented 5'->3' along each anchor, leave as ``None``.
-
-        The expectation follows ``signal_matrix.feature``: ``"cuts_plus"`` (left ends) is
-        scored on the forward strand, ``"cuts_minus"`` (right ends) on the reverse strand
-        and ``"cuts"`` as the mean of the two, since a combined matrix holds both kinds of
-        cut. Other features (midpoint, coverage, proximal/distal) are rejected.
         """
         if signal_matrix.bin_size != 1:
             raise ValueError(
