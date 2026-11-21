@@ -56,6 +56,15 @@ frags = vp.FragmentStore.load("sample.frags.npz")
 
 Both `.npz` and `.parquet` preserve `assay`, `strands` (for `chip_exo`), `metadata`, and sort order.
 
+## Blacklist regions
+
+```python
+frags = vp.FragmentStore.from_bam("sample.bam", assay="chec", exclude_regions="blacklist.bed.gz")
+clean = frags.exclude_regions(df_with_chrom_start_end, mode="overlap")   # or "midpoint"
+```
+
+`exclude_regions` takes a BED path (plain or `.gz`) or a DataFrame with `chrom`/`chr`/`seqnames`, `start`, `end` (0-based, half-open). Default `mode="overlap"` drops fragments sharing at least one base with a region. `n_fragments` (and so CPM) counts only kept fragments. The removal is recorded in `metadata["exclude_regions"]`. A warning is raised when no region is on a store chromosome (`chr1` vs `1`). `from_bam` and `from_fragments_bed` accept `exclude_regions=` / `exclude_mode=`; `pyvplot-report` has `--blacklist` / `--blacklist-mode`.
+
 ## Filtering & Merging
 
 ```python

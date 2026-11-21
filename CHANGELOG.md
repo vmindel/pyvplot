@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added (blacklist)
+- `FragmentStore.exclude_regions(regions, mode=)` drops fragments overlapping (or with their midpoint in) a BED file or DataFrame of regions; `from_bam` / `from_fragments_bed` take `exclude_regions=` and `exclude_mode=`; `pyvplot-report` takes `--blacklist` and `--blacklist-mode`. The removal is recorded in `metadata["exclude_regions"]`.
+
 ### Fixed
 - `KmerBiasTable.from_cuts` placed right-end cuts one base out in the reverse-complement frame, so right ends taught the table nothing. `correct_matrix` now scores left-end (`cuts_plus`), right-end (`cuts_minus`) and combined (`cuts`) matrices in the matching frame, and rejects non-cut features.
 - `frip(..., return_per_peak=True)` raised `IndexError` for peaks DataFrames without a default index.

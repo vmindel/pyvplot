@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import gzip
 from collections.abc import Collection
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal, overload
 
 import numpy as np
@@ -13,7 +11,7 @@ import pandas as pd
 
 from pyvplot.assays import resolve_len_range
 from pyvplot.extract import HAS_NUMBA, njit
-from pyvplot.store import FragmentStore, parse_int_columns
+from pyvplot.store import FragmentStore, load_intervals
 
 
 def _gaussian_1d(arr: np.ndarray, sigma: float) -> np.ndarray:
@@ -101,34 +99,7 @@ def insert_size_distribution(
 
 
 def _load_peaks_df(peaks: Any) -> pd.DataFrame:
-    if isinstance(peaks, (str, Path)):
-        p = Path(peaks)
-        opener = gzip.open if p.suffix == ".gz" else open
-        rows: list[tuple[str, int, int]] = []
-        with opener(p, "rt", encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh, start=1):
-                if not line or line[0] == "#" or line.startswith(("track ", "browser ")):
-                    continue
-                parts = line.rstrip("\r\n").split("\t")
-                if len(parts) < 3:
-                    parts = line.split()
-                if len(parts) < 3:
-                    continue
-                start, end = parse_int_columns(parts, (1, 2), p, lineno)
-                rows.append((parts[0], start, end))
-        return pd.DataFrame(rows, columns=["chrom", "start", "end"])
-    df = peaks if isinstance(peaks, pd.DataFrame) else pd.DataFrame(peaks)
-    col_map = {str(c).lower(): c for c in df.columns}
-    chrom_col = next((col_map[k] for k in ("chrom", "chr", "seqnames", "chromosome") if k in col_map), None)
-    if chrom_col is None or "start" not in col_map or "end" not in col_map:
-        raise ValueError("Peaks must have 'chrom' (or 'chr'), 'start', and 'end' columns.")
-    return pd.DataFrame(
-        {
-            "chrom": df[chrom_col].astype(str).to_numpy(),
-            "start": df[col_map["start"]].to_numpy(dtype=np.int64),
-            "end": df[col_map["end"]].to_numpy(dtype=np.int64),
-        }
-    )
+    return load_intervals(peaks, what="Peaks")
 
 
 def _merge_sorted_intervals(starts: np.ndarray, ends: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

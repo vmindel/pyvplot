@@ -107,3 +107,30 @@ def test_pyvplot_report_is_a_console_script_and_the_example_wraps_it():
     assert "from pyvplot.cli import main" in SCRIPT.read_text()
     args = cli.parse_args(["--bam", "a.bam", "--motifs", "m.bed", "--out", "o", "--threads", "3"])
     assert args.threads == 3
+
+
+@pytest.mark.filterwarnings("ignore:.*zero expected background:UserWarning")
+def test_report_blacklist_flag_filters_and_invalidates_the_cache(tmp_path):
+    sim, anchors = vp.datasets.simulate_chec(n_sites=10, seed=0)
+    bam = tmp_path / "sim.bam"
+    chrom_len = int(sim.ends["chr1"].max()) + 1000
+    _write_bam(sim, bam, chrom_len=chrom_len)
+    bed = tmp_path / "motifs.bed"
+    pd.DataFrame(
+        {"chrom": anchors["chrom"], "start": anchors["center"] - 5, "end": anchors["center"] + 5,
+         "name": anchors.index, "score": 0, "strand": anchors["strand"]}
+    ).to_csv(bed, sep="\t", header=False, index=False)
+    blacklist = tmp_path / "bl.bed"
+    blacklist.write_text(f"chr1\t0\t{chrom_len // 2}\n")
+
+    from pyvplot import cli
+
+    out = tmp_path / "res" / "x"
+    base = ["--bam", str(bam), "--motifs", str(bed), "--out", str(out)]
+    cli.main(base)
+    full = vp.FragmentStore.load(str(out) + ".frags.npz")
+    cli.main([*base, "--blacklist", str(blacklist)])  # changed settings rebuild the cache
+    kept = vp.FragmentStore.load(str(out) + ".frags.npz")
+    assert 0 < kept.n_fragments < full.n_fragments
+    assert kept.metadata["exclude_regions"][0]["n_removed"] == full.n_fragments - kept.n_fragments
+    assert kept.metadata["ingest_settings"]["blacklist_mode"] == "overlap"

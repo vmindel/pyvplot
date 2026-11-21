@@ -30,6 +30,33 @@ atac = vp.FragmentStore.from_fragments_bed("fragments.tsv.gz", assay="atac")
 store = vp.FragmentStore.from_dataframe(df, assay="mnase")
 ```
 
+### Blacklist regions
+
+Drop fragments in problematic regions (an ENCODE-style blacklist, satellites, rDNA, regions where your control is high) while loading. Pass a BED path (plain or `.gz`) or a DataFrame with `chrom`, `start`, `end`:
+
+```py
+store = vp.FragmentStore.from_bam("chec.bam", assay="chec", exclude_regions="blacklist.bed.gz")
+```
+
+The same filter works on an existing store, and nothing is removed from the original:
+
+```python
+import pandas as pd
+import pyvplot as vp
+
+store, anchors = vp.datasets.simulate_chec(n_sites=20, seed=0)
+blacklist = pd.DataFrame({"chrom": ["chr1"], "start": [0], "end": [30_000]})
+clean = store.exclude_regions(blacklist)
+rec = clean.metadata["exclude_regions"][0]
+print(f"{rec['n_removed']:,} of {rec['n_before']:,} fragments removed; {clean.n_fragments:,} kept")
+```
+
+```text
+3,156 of 4,200 fragments removed; 1,044 kept
+```
+
+By default a fragment is dropped when it shares at least one base with a region (`mode="overlap"`); `mode="midpoint"` drops only fragments whose midpoint lies inside. `n_fragments`, and so CPM, counts the kept fragments only, and the removal is recorded in `store.metadata["exclude_regions"]` and saved with the cache. The regions' chromosome names must match the store's: if none do, a warning says so and nothing is removed. On the command line, use `pyvplot-report --blacklist blacklist.bed.gz`.
+
 Check the length distribution before relying on the preset's named size bins:
 
 ```py
@@ -127,6 +154,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--exclude-chroms", nargs="*", default=["chrM", "MT"])
     p.add_argument("--dedup", action="store_true", help="drop SAM-flagged duplicates")
     p.add_argument("--threads", type=int, default=1, help="BAM decompression threads")
+    p.add_argument("--blacklist", type=Path, help="BED of regions to drop at load (plain or .gz)")
+    p.add_argument(
+        "--blacklist-mode", choices=["overlap", "midpoint"], default="overlap",
+        help="drop fragments overlapping a region, or only those whose midpoint is inside",
+    )
     return p.parse_args(argv)
 
 
@@ -138,6 +170,9 @@ def load_store(args: argparse.Namespace) -> vp.FragmentStore:
         "min_mapq": args.min_mapq,
         "exclude_chroms": sorted(args.exclude_chroms),
         "dedup": args.dedup,
+        "blacklist": None if args.blacklist is None else str(args.blacklist.resolve()),
+        "blacklist_mtime_ns": None if args.blacklist is None else args.blacklist.stat().st_mtime_ns,
+        "blacklist_mode": args.blacklist_mode,
     }
     if cache.exists() and cache.stat().st_mtime > args.bam.stat().st_mtime:
         store = vp.FragmentStore.load(cache)
@@ -153,6 +188,8 @@ def load_store(args: argparse.Namespace) -> vp.FragmentStore:
         exclude_chroms=args.exclude_chroms,
         dedup="flag" if args.dedup else False,
         threads=args.threads,
+        exclude_regions=args.blacklist,
+        exclude_mode=args.blacklist_mode,
     )
     store.metadata["ingest_settings"] = settings
     store.save(cache)
