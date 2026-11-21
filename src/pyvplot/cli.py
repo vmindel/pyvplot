@@ -33,6 +33,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--exclude-chroms", nargs="*", default=["chrM", "MT"])
     p.add_argument("--dedup", action="store_true", help="drop SAM-flagged duplicates")
     p.add_argument("--threads", type=int, default=1, help="BAM decompression threads")
+    p.add_argument("--blacklist", type=Path, help="BED of regions to drop at load (plain or .gz)")
+    p.add_argument(
+        "--blacklist-mode", choices=["overlap", "midpoint"], default="overlap",
+        help="drop fragments overlapping a region, or only those whose midpoint is inside",
+    )
     return p.parse_args(argv)
 
 
@@ -44,6 +49,9 @@ def load_store(args: argparse.Namespace) -> vp.FragmentStore:
         "min_mapq": args.min_mapq,
         "exclude_chroms": sorted(args.exclude_chroms),
         "dedup": args.dedup,
+        "blacklist": None if args.blacklist is None else str(args.blacklist.resolve()),
+        "blacklist_mtime_ns": None if args.blacklist is None else args.blacklist.stat().st_mtime_ns,
+        "blacklist_mode": args.blacklist_mode,
     }
     if cache.exists() and cache.stat().st_mtime > args.bam.stat().st_mtime:
         store = vp.FragmentStore.load(cache)
@@ -59,6 +67,8 @@ def load_store(args: argparse.Namespace) -> vp.FragmentStore:
         exclude_chroms=args.exclude_chroms,
         dedup="flag" if args.dedup else False,
         threads=args.threads,
+        exclude_regions=args.blacklist,
+        exclude_mode=args.blacklist_mode,
     )
     store.metadata["ingest_settings"] = settings
     store.save(cache)

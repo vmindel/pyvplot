@@ -23,7 +23,7 @@ pip install "pyvplot[all] @ git+https://github.com/vmindel/pyvplot.git"
 import pyvplot as vp
 
 # Read the BAM once (single pass) and cache; load() takes well under a second afterwards.
-store = vp.FragmentStore.from_bam("chec.bam", assay="chec", min_mapq=20)
+store = vp.FragmentStore.from_bam("chec.bam", assay="chec", min_mapq=20, exclude_regions="blacklist.bed.gz")  # blacklist optional
 store.save("chec.frags.npz")
 
 # Anchors: a BED file (strand in column 6) or a DataFrame with chrom/center/strand.

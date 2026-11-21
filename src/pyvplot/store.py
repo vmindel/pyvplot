@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import warnings
 from array import array
 from collections import defaultdict
 from collections.abc import Collection, Iterable
@@ -28,6 +29,91 @@ DEFAULT_SINGLE_EXCLUDE_FLAGS = 0x4 | 0x100 | 0x200 | 0x800
 SAM_DUPLICATE_FLAG = 0x400
 
 _STORE_FORMAT_VERSION = 1
+
+
+_REGION_MODES = ("overlap", "midpoint")
+
+
+def load_intervals(table: Any, what: str = "Regions") -> pd.DataFrame:
+    """Read genomic intervals from a BED path (plain or ``.gz``) or a DataFrame.
+
+    Returns a DataFrame with ``chrom``, ``start``, ``end`` and a default index. DataFrame
+    columns are matched case-insensitively: ``chrom``/``chr``/``seqnames``/``chromosome``,
+    ``start`` and ``end``. Intervals are 0-based, half-open like BED.
+    """
+    if isinstance(table, (str, Path)):
+        path = Path(table)
+        opener = gzip.open if path.suffix == ".gz" else open
+        rows: list[tuple[str, int, int]] = []
+        with opener(path, "rt", encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if not line or line[0] == "#" or line.startswith(("track ", "browser ")):
+                    continue
+                parts = line.rstrip("\r\n").split("\t")
+                if len(parts) < 3:
+                    parts = line.split()
+                if len(parts) < 3:
+                    continue
+                start, end = parse_int_columns(parts, (1, 2), path, lineno)
+                rows.append((parts[0], start, end))
+        out = pd.DataFrame(rows, columns=["chrom", "start", "end"])
+    else:
+        df = table if isinstance(table, pd.DataFrame) else pd.DataFrame(table)
+        col_map = {str(c).lower(): c for c in df.columns}
+        chrom_col = next(
+            (col_map[k] for k in ("chrom", "chr", "seqnames", "chromosome") if k in col_map), None
+        )
+        if chrom_col is None or "start" not in col_map or "end" not in col_map:
+            raise ValueError(
+                f"{what} must have 'chrom' (or 'chr'), 'start' and 'end' columns; "
+                f"got {list(df.columns)}."
+            )
+        out = pd.DataFrame(
+            {
+                "chrom": df[chrom_col].astype(str).to_numpy(),
+                "start": df[col_map["start"]].to_numpy(dtype=np.int64),
+                "end": df[col_map["end"]].to_numpy(dtype=np.int64),
+            }
+        )
+    if len(out) and bool((out["end"] < out["start"]).any()):
+        raise ValueError(f"{what} have end < start; intervals are [start, end).")
+    return out
+
+
+def merge_intervals(starts: np.ndarray, ends: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Merge overlapping or touching ``[start, end)`` intervals into sorted, disjoint ones."""
+    if len(starts) == 0:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+    order = np.argsort(starts, kind="stable")
+    s = np.asarray(starts, dtype=np.int64)[order]
+    e = np.asarray(ends, dtype=np.int64)[order]
+    reach = np.maximum.accumulate(e)
+    new_group = np.empty(len(s), dtype=np.bool_)
+    new_group[0] = True
+    new_group[1:] = s[1:] > reach[:-1]
+    group_starts = np.flatnonzero(new_group)
+    group_ends = np.append(group_starts[1:], len(s)) - 1
+    return s[group_starts], reach[group_ends]
+
+
+def _in_regions(
+    frag_starts: np.ndarray,
+    frag_ends: np.ndarray,
+    reg_starts: np.ndarray,
+    reg_ends: np.ndarray,
+    mode: str,
+) -> np.ndarray:
+    """Boolean mask of fragments that hit the (merged, sorted) regions."""
+    fs = frag_starts.astype(np.int64, copy=False)
+    fe = frag_ends.astype(np.int64, copy=False)
+    if mode == "midpoint":
+        mid = (fs + fe) // 2
+        k = np.searchsorted(reg_starts, mid, side="right") - 1
+        return (k >= 0) & (mid < reg_ends[np.maximum(k, 0)])
+    # overlap: some region has start < frag_end and end > frag_start. Merged regions are
+    # disjoint and sorted, so only the last one starting before the fragment end can qualify.
+    k = np.searchsorted(reg_starts, fe, side="left") - 1
+    return (k >= 0) & (reg_ends[np.maximum(k, 0)] > fs)
 
 
 class _ChromBuffers:
@@ -308,6 +394,95 @@ class FragmentStore:
             dedup=dedup,
         )
 
+    def exclude_regions(
+        self,
+        regions: Any,
+        mode: str = "overlap",
+    ) -> FragmentStore:
+        """Return a copy without the fragments that hit ``regions`` (e.g. an ENCODE-style blacklist).
+
+        Parameters
+        ----------
+        regions:
+            A BED path (plain or ``.gz``; ``#``, ``track`` and ``browser`` lines are
+            skipped) or a DataFrame with ``chrom`` (or ``chr`` / ``seqnames`` /
+            ``chromosome``), ``start`` and ``end`` columns. Intervals are 0-based,
+            half-open like BED, and may overlap each other.
+        mode:
+            ``"overlap"`` (default) drops every fragment sharing at least one base with a
+            region, so a fragment poking into the region by a single base goes too.
+            ``"midpoint"`` drops fragments whose midpoint lies inside a region. For a
+            stranded store each read is one base, so both modes agree.
+
+        Notes
+        -----
+        ``n_fragments`` of the result counts only the kept fragments, so CPM scaling no
+        longer includes the blacklisted regions. Chromosomes absent from ``regions`` are
+        left untouched, and a warning is raised when no region lies on a chromosome of the
+        store (usually ``chr1`` vs ``1``). What was removed is recorded in
+        ``metadata["exclude_regions"]``.
+        """
+        if mode not in _REGION_MODES:
+            raise ValueError(f"Invalid mode {mode!r}; expected one of {list(_REGION_MODES)}.")
+        table = load_intervals(regions, what="Regions")
+        source = str(regions) if isinstance(regions, (str, Path)) else "DataFrame"
+
+        if len(table) and not set(table["chrom"]) & set(self.starts):
+            shown = ", ".join(repr(c) for c in list(dict.fromkeys(table["chrom"]))[:5])
+            have = ", ".join(repr(c) for c in self.chroms[:5])
+            warnings.warn(
+                f"None of the {len(table)} regions lie on a chromosome of this store "
+                f"(regions: {shown}; store: {have}). Nothing was removed: check chromosome "
+                "naming ('chr1' vs '1').",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        by_chrom = {
+            str(c): merge_intervals(g["start"].to_numpy(), g["end"].to_numpy())
+            for c, g in table.groupby("chrom", sort=False)
+        }
+
+        new_starts: dict[str, np.ndarray] = {}
+        new_ends: dict[str, np.ndarray] = {}
+        new_strands: dict[str, np.ndarray] | None = {} if self.strands is not None else None
+        n_removed = 0
+        for chrom in self.starts:
+            s, e = self.starts[chrom], self.ends[chrom]
+            st = self.strands[chrom] if self.strands is not None else None
+            if chrom in by_chrom and len(s) > 0:
+                reg_s, reg_e = by_chrom[chrom]
+                drop = _in_regions(s, e, reg_s, reg_e, mode)
+                n_removed += int(drop.sum())
+                keep = ~drop
+                s, e = s[keep], e[keep]
+                st = st[keep] if st is not None else None
+            new_starts[chrom] = s.copy()
+            new_ends[chrom] = e.copy()
+            if new_strands is not None and st is not None:
+                new_strands[chrom] = st.copy()
+
+        n_regions = int(sum(len(v[0]) for v in by_chrom.values()))
+        meta = dict(self.metadata)
+        meta["exclude_regions"] = [
+            *meta.get("exclude_regions", []),
+            {
+                "source": source,
+                "mode": mode,
+                "n_regions": n_regions,
+                "n_removed": int(n_removed),
+                "n_before": int(self.n_fragments),
+            },
+        ]
+        return FragmentStore(
+            starts=new_starts,
+            ends=new_ends,
+            assay=self.assay,
+            strands=new_strands,
+            metadata=meta,
+            sort=False,
+        )
+
     def to_dataframe(self, chrom: str | None = None) -> pd.DataFrame:
         """Export stored fragments to a pandas DataFrame."""
         target_chroms = [chrom] if chrom is not None else list(self.starts.keys())
@@ -466,6 +641,8 @@ class FragmentStore:
         pairing: str = "read1",
         apply_shift: bool = True,
         threads: int = 1,
+        exclude_regions: Any = None,
+        exclude_mode: str = "overlap",
     ) -> FragmentStore:
         """Ingest fragments from a BAM/CRAM file via ``pysam``.
 
@@ -504,6 +681,13 @@ class FragmentStore:
             Extra threads pysam uses to decompress the BAM (default ``1``). The read
             loop itself stays single-threaded, but decompression is a large share of
             the time on deep libraries.
+        exclude_regions:
+            Optional blacklist: a BED path or a DataFrame with ``chrom``, ``start``,
+            ``end``. Fragments hitting it are dropped right after ingestion, so
+            ``n_fragments`` (and CPM) excludes them. See
+            [`exclude_regions`][pyvplot.FragmentStore.exclude_regions].
+        exclude_mode:
+            ``"overlap"`` (default) or ``"midpoint"``; how a fragment is matched to a region.
         """
         try:
             import pysam
@@ -638,7 +822,7 @@ class FragmentStore:
 
         starts_np, ends_np, strands_np = buf.to_numpy()
 
-        return cls(
+        store = cls(
             starts=starts_np,
             ends=ends_np,
             assay=cfg,
@@ -647,6 +831,9 @@ class FragmentStore:
             sort=True,
             dedup=dedup_coords,
         )
+        if exclude_regions is not None:
+            store = store.exclude_regions(exclude_regions, mode=exclude_mode)
+        return store
 
     @classmethod
     def from_fragments_bed(
@@ -661,6 +848,8 @@ class FragmentStore:
         dedup: bool = False,
         bedpe: bool | None = None,
         use_count: bool = False,
+        exclude_regions: Any = None,
+        exclude_mode: str = "overlap",
     ) -> FragmentStore:
         """Ingest fragments from a BED, 10x/ArchR ``.frag.tsv[.gz]``, or BEDPE file.
 
@@ -782,7 +971,7 @@ class FragmentStore:
 
         starts_np, ends_np, strands_np = buf.to_numpy()
 
-        return cls(
+        store = cls(
             starts=starts_np,
             ends=ends_np,
             assay=cfg,
@@ -791,6 +980,9 @@ class FragmentStore:
             sort=True,
             dedup=dedup,
         )
+        if exclude_regions is not None:
+            store = store.exclude_regions(exclude_regions, mode=exclude_mode)
+        return store
 
     def save(
         self,
