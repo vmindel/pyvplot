@@ -95,4 +95,15 @@ def test_bam_to_vplot_script(tmp_path):
 
 def test_your_data_page_embeds_the_script():
     page = (ROOT / "docs" / "tutorials" / "your-data.md").read_text()
-    assert SCRIPT.read_text() in page, "docs/tutorials/your-data.md is out of sync with examples/bam_to_vplot.py"
+    cli = (ROOT / "src" / "pyvplot" / "cli.py").read_text()
+    assert cli in page, "docs/tutorials/your-data.md is out of sync with src/pyvplot/cli.py"
+
+
+def test_pyvplot_report_is_a_console_script_and_the_example_wraps_it():
+    assert 'pyvplot-report = "pyvplot.cli:main"' in (ROOT / "pyproject.toml").read_text()
+    from pyvplot import cli
+
+    assert callable(cli.main)
+    assert "from pyvplot.cli import main" in SCRIPT.read_text()
+    args = cli.parse_args(["--bam", "a.bam", "--motifs", "m.bed", "--out", "o", "--threads", "3"])
+    assert args.threads == 3

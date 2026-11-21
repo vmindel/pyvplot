@@ -4,10 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyvplot"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Fast, assay-aware Python toolkit for paired-end fragment geometry, V-plots, cleavage cut-site footprints, and nucleosome phasing."
 readme = "README.md"
 license = { text = "MIT" }
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [
     { name = "vmindel" },
@@ -32,6 +33,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
@@ -89,11 +91,15 @@ docs = [
 
 [project.scripts]
 pyvplot-install-skills = "pyvplot._skills.install:main"
+pyvplot-report = "pyvplot.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/vmindel/pyvplot"
 Documentation = "https://vmindel.github.io/pyvplot/"
 Repository = "https://github.com/vmindel/pyvplot"
+
+[tool.hatch.version]
+path = "src/pyvplot/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pyvplot"]

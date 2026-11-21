@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from pyvplot.assays import get_assay
 from pyvplot.matrices import SignalMatrix
 from pyvplot.store import FragmentStore
 from pyvplot.vplot import VPlot
@@ -58,6 +59,39 @@ def _encode_sequence_kmers(seq: str, k: int) -> np.ndarray:
         codes = (codes << 2) | np.where(b >= 0, b, 0)
     codes[~valid] = -1
     return codes
+
+
+_KMER_CHUNK = 4_000_000
+
+
+def _count_kmers(
+    seq: str, k: int, k_starts: np.ndarray, chunk: int = _KMER_CHUNK
+) -> tuple[np.ndarray, np.ndarray]:
+    """Count every unambiguous k-mer of ``seq`` and those starting at ``k_starts``.
+
+    Works in windows of ``chunk`` k-mers so a whole chromosome is never encoded at once
+    (a human chr1 would need several GB). Returns ``(background, observed)`` counts.
+    """
+    n_codes = 4**k
+    background = np.zeros(n_codes, dtype=np.float64)
+    observed = np.zeros(n_codes, dtype=np.float64)
+    n_kmers = len(seq) - k + 1
+    if n_kmers <= 0:
+        return background, observed
+    k_starts = np.sort(k_starts[(k_starts >= 0) & (k_starts < n_kmers)])
+    for a in range(0, n_kmers, chunk):
+        b = min(a + chunk, n_kmers)
+        codes = _encode_sequence_kmers(seq[a : b + k - 1], k)
+        valid = codes[codes >= 0]
+        if len(valid):
+            background += np.bincount(valid, minlength=n_codes)
+        lo, hi = np.searchsorted(k_starts, [a, b])
+        if hi > lo:
+            hit = codes[k_starts[lo:hi] - a]
+            hit = hit[hit >= 0]
+            if len(hit):
+                observed += np.bincount(hit, minlength=n_codes)
+    return background, observed
 
 
 def _read_fasta(path: Path) -> dict[str, str]:
@@ -109,6 +143,22 @@ def _get_chrom_seq(sequences: Any, chrom: str) -> str | None:
     if chrom in sequences:
         return str(sequences[chrom][:].seq if hasattr(sequences[chrom][:], "seq") else sequences[chrom])
     return None
+
+
+_FEATURE_FRAME = {
+    "cuts_plus": "forward",
+    "cuts_minus": "reverse",
+    "cuts": "both",
+    "cuts_stranded": "both",
+}
+
+
+def _is_stranded_assay(name: str) -> bool:
+    """Whether the named assay stores one 5' end per read (unknown names count as paired-end)."""
+    try:
+        return not get_assay(name).paired_end
+    except ValueError:
+        return False
 
 
 class KmerBiasTable:
@@ -261,48 +311,32 @@ class KmerBiasTable:
             if seq is None or len(seq) < k:
                 continue
             n_used += 1
-            codes_fwd = _encode_sequence_kmers(seq, k)
-            valid_bg = codes_fwd[codes_fwd >= 0]
-            if len(valid_bg) > 0:
-                bg_counts += np.bincount(valid_bg, minlength=n_kmers)
-
-            # Reverse-complement codes for minus-strand cuts
-            rc_seq = reverse_complement(seq)
-            codes_rc = _encode_sequence_kmers(rc_seq, k)
-            valid_rc_bg = codes_rc[codes_rc >= 0]
-            if len(valid_rc_bg) > 0:
-                bg_counts += np.bincount(valid_rc_bg, minlength=n_kmers)
+            n_seq = len(seq)
 
             starts = store.starts[chrom]
             ends = store.ends[chrom]
-            n_seq = len(seq)
-
             if store.strands is not None:
+                # One 5' base per read: the cut sits just before the base itself.
                 st = store.strands[chrom]
                 plus_pos = starts[st >= 0]
                 minus_pos = starts[st < 0]
             else:
+                # Cuts are the boundaries `start` and `end`. The base just after the left
+                # boundary is `start`; in the reverse-complement reading the base just after
+                # the right boundary is `end - 1`.
                 plus_pos = starts
-                minus_pos = ends
+                minus_pos = ends - 1
 
-            # Forward / left cuts: k-mer starts at pos - offset
-            k_starts_fwd = plus_pos - offset
-            ok_f = (k_starts_fwd >= 0) & (k_starts_fwd < len(codes_fwd))
-            if np.any(ok_f):
-                c_f = codes_fwd[k_starts_fwd[ok_f]]
-                c_f = c_f[c_f >= 0]
-                if len(c_f) > 0:
-                    obs_counts += np.bincount(c_f, minlength=n_kmers)
-
-            # Reverse / right cuts: position p on forward maps to (n_seq - 1 - p) on rc_seq
-            rc_pos = (n_seq - 1) - minus_pos
-            k_starts_rc = rc_pos - offset
-            ok_r = (k_starts_rc >= 0) & (k_starts_rc < len(codes_rc))
-            if np.any(ok_r):
-                c_r = codes_rc[k_starts_rc[ok_r]]
-                c_r = c_r[c_r >= 0]
-                if len(c_r) > 0:
-                    obs_counts += np.bincount(c_r, minlength=n_kmers)
+            # Left cuts: the k-mer starts `offset` bases before the cut base.
+            bg, obs = _count_kmers(seq, k, plus_pos.astype(np.int64) - offset)
+            bg_counts += bg
+            obs_counts += obs
+            # Right cuts: position p on the forward strand is (n_seq - 1 - p) on the
+            # reverse complement, scored in that frame.
+            rc_cut = (n_seq - 1) - minus_pos.astype(np.int64)
+            bg, obs = _count_kmers(reverse_complement(seq), k, rc_cut - offset)
+            bg_counts += bg
+            obs_counts += obs
 
         if n_used == 0:
             raise ValueError(
@@ -337,12 +371,45 @@ class KmerBiasTable:
         scores[pos_idx[in_bounds]] = self.weights[codes[in_bounds]]
         return scores
 
+    def score_sequence_reverse(
+        self, seq: str, strand: str | int = "+", stranded: bool = False
+    ) -> np.ndarray:
+        """Expected propensity of cuts made in the reverse-complement reading frame.
+
+        Returns one value per bin, oriented like [`score_sequence`][pyvplot.KmerBiasTable.score_sequence]
+        (5'->3' along the anchor). Bin ``i`` is the boundary just before ``seq[i]``. For
+        paired-end fragments (``stranded=False``) the right-end cut at that boundary has
+        ``seq[i - 1]`` as the first base after the cut when reading the opposite strand. For
+        stranded 5'-end data (``stranded=True``) the cut is just before base ``seq[i]`` itself.
+        """
+        s = reverse_complement(seq) if strand in {"-", "-1", -1} else seq
+        n = len(s)
+        out = np.ones(n, dtype=np.float64)
+        if n < self.k:
+            return out
+        sc = self.score_sequence(reverse_complement(s), strand="+")
+        if stranded:
+            out[:] = sc[::-1]
+        elif n > 1:
+            out[1:] = sc[:0:-1]
+        return out
+
     def expected_matrix(
         self,
         sequences: Sequence[str],
         strands: Sequence[str | int] | None = None,
+        frame: str = "forward",
+        stranded: bool = False,
     ) -> np.ndarray:
-        """Compute a 2D ``(n_anchors, seq_len)`` matrix of expected per-base cleavage bias."""
+        """Compute a 2D ``(n_anchors, seq_len)`` matrix of expected per-base cleavage bias.
+
+        ``frame`` selects which cuts the expectation is for: ``"forward"`` (left ends in
+        the anchor's orientation), ``"reverse"`` (right ends, read on the opposite strand)
+        or ``"both"`` (their mean, for a combined-ends matrix). ``stranded`` is for
+        single-end 5'-end stores such as ChIP-exo.
+        """
+        if frame not in {"forward", "reverse", "both"}:
+            raise ValueError(f"Invalid frame {frame!r}; expected 'forward', 'reverse' or 'both'.")
         if len(sequences) == 0:
             return np.empty((0, 0), dtype=np.float64)
         seq_len = len(sequences[0])
@@ -353,7 +420,15 @@ class KmerBiasTable:
                     f"All anchor sequences must have equal length ({seq_len}), got {len(seq)} at index {i}."
                 )
             st = "+" if strands is None else strands[i]
-            out[i] = self.score_sequence(seq, strand=st)
+            if frame == "forward":
+                out[i] = self.score_sequence(seq, strand=st)
+            elif frame == "reverse":
+                out[i] = self.score_sequence_reverse(seq, strand=st, stranded=stranded)
+            else:
+                out[i] = 0.5 * (
+                    self.score_sequence(seq, strand=st)
+                    + self.score_sequence_reverse(seq, strand=st, stranded=stranded)
+                )
         return out
 
     @staticmethod
@@ -397,6 +472,11 @@ class KmerBiasTable:
         strands:
             Optional per-anchor strands (``"+"`` / ``"-"``). If sequences are
             already oriented 5'->3' along each anchor, leave as ``None``.
+
+        The expectation follows ``signal_matrix.feature``: ``"cuts_plus"`` (left ends) is
+        scored on the forward strand, ``"cuts_minus"`` (right ends) on the reverse strand
+        and ``"cuts"`` as the mean of the two, since a combined matrix holds both kinds of
+        cut. Other features (midpoint, coverage, proximal/distal) are rejected.
         """
         if signal_matrix.bin_size != 1:
             raise ValueError(
@@ -406,7 +486,14 @@ class KmerBiasTable:
             raise ValueError(
                 f"Expected {signal_matrix.n_anchors} sequences, got {len(sequences)}."
             )
-        exp_full = self.expected_matrix(sequences, strands=strands)
+        frame = _FEATURE_FRAME.get(signal_matrix.feature)
+        if frame is None:
+            raise ValueError(
+                f"Sequence bias correction applies to cut-site matrices; got feature="
+                f"{signal_matrix.feature!r}. Use 'cuts', 'cuts_plus' or 'cuts_minus'."
+            )
+        stranded = _is_stranded_assay(signal_matrix.assay)
+        exp_full = self.expected_matrix(sequences, strands=strands, frame=frame, stranded=stranded)
         n_bins = signal_matrix.n_bins
         pad_left = self.cut_offset
         pad_right = self.k - 1 - self.cut_offset
@@ -448,7 +535,7 @@ def normalize_by_control(
     signal: SignalMatrix | VPlot | np.ndarray,
     control: SignalMatrix | VPlot | np.ndarray,
     mode: str = "ratio",
-    pseudocount: float = 1.0,
+    pseudocount: float | None = None,
 ) -> SignalMatrix | VPlot | np.ndarray:
     """Normalize a signal matrix, V-plot, or array against a naked-DNA / IgG control.
 
@@ -462,7 +549,11 @@ def normalize_by_control(
         (``log2((signal + pc) / (control + pc))``), or ``"subtract"``
         (``signal - control``).
     pseudocount:
-        Pseudocount for ``"ratio"`` and ``"log2fc"``.
+        Pseudocount for ``"ratio"`` and ``"log2fc"``, in the units of the inputs.
+        ``None`` (default) adds half a raw count: for a [`VPlot`][pyvplot.VPlot] or
+        [`SignalMatrix`][pyvplot.SignalMatrix] that is scaled to its normalisation
+        (CPM, per anchor, ...), for plain arrays the arrays are taken to be raw counts.
+        A number is added as given, so a value such as ``1.0`` swamps CPM-scaled signal.
     """
     m = mode.lower()
     if m not in {"ratio", "log2fc", "subtract"}:
@@ -474,12 +565,20 @@ def normalize_by_control(
     if isinstance(signal, SignalMatrix) and isinstance(control, SignalMatrix):
         if signal.shape != control.shape:
             raise ValueError(f"Shape mismatch: {signal.shape} vs {control.shape}.")
+        if signal.normalization != control.normalization:
+            raise ValueError(
+                f"Signal and control are in different units: {signal.normalization!r} vs "
+                f"{control.normalization!r}. Normalise both the same way first."
+            )
         if signal.feature != control.feature or signal.motif_overlap != control.motif_overlap:
             raise ValueError(
                 f"Signal and control were built differently: feature {signal.feature!r} vs "
                 f"{control.feature!r}, motif_overlap {signal.motif_overlap!r} vs {control.motif_overlap!r}."
             )
         a, b = signal.values, control.values
+        if pseudocount is None:
+            sa, sb = signal.raw_count_scale(), control.raw_count_scale()
+            pseudocount = 0.5 * float(np.sqrt(sa * sb)) if sa is not None and sb is not None else 0.5
         if m == "ratio":
             vals = (a + pseudocount) / (b + pseudocount)
         elif m == "log2fc":
@@ -505,6 +604,8 @@ def normalize_by_control(
     b = np.asarray(control, dtype=np.float64)
     if a.shape != b.shape:
         raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}.")
+    if pseudocount is None:
+        pseudocount = 0.5
     if m == "ratio":
         return (a + pseudocount) / (b + pseudocount)
     if m == "log2fc":

@@ -56,6 +56,8 @@ No data to hand? `store, anchors = vp.datasets.simulate_chec()` returns a simula
 - Topic tutorials: V-plots and differential V-plots, matrices and footprints, QC and phasing, bias and track export.
 - [API reference](https://vmindel.github.io/pyvplot/api/store/).
 
+From the shell, `pyvplot-report --bam chec.bam --motifs motifs.bed --out results/chec` runs the BAM-to-figures pipeline (`--threads` speeds up BAM decompression); see [your own data](https://vmindel.github.io/pyvplot/tutorials/your-data/).
+
 A Claude Code skill for pyvplot ships with the package: run `pyvplot-install-skills` to install it ([details](https://vmindel.github.io/pyvplot/claude-skill/)).
 
 ## Development

@@ -105,3 +105,19 @@ def test_cut_site_footprint_and_protection_score():
 
     # Bound motif must score substantially higher protection than flat unbound motif
     assert scores.loc["motif_bound", "protection_score"] > scores.loc["motif_unbound", "protection_score"]
+
+
+def test_signal_matrix_normalize_is_not_compounding():
+    from pyvplot.matrices import SignalMatrix
+
+    raw = SignalMatrix(
+        values=np.ones((2, 4)), region_index=np.array([0, 1]), upstream=20, downstream=20,
+        bin_size=10, n_fragments=2_000_000,
+    )
+    cpm = raw.normalize("cpm")
+    with pytest.raises(ValueError, match="already normalised"):
+        cpm.normalize("rpkm")
+    assert raw.raw_count_scale() == 1.0
+    assert cpm.raw_count_scale() == pytest.approx(0.5)
+    assert raw.normalize("rpkm").raw_count_scale() == pytest.approx(0.5 / 0.01)
+    assert raw.normalize("zscore").raw_count_scale() is None

@@ -131,3 +131,24 @@ def test_missing_chrom_gives_empty(store):
     with pytest.warns(UserWarning):
         lv = store.locus_vplot("chrZ:0-100")
     assert len(lv.points) == 0
+
+
+def test_motif_overlap_column_is_empty_without_a_motif(store):
+    lv = store.locus_vplot("chr1:1000-3000")
+    assert len(lv.points) > 0
+    assert lv.points["motif_overlap"].isna().all()
+    with pytest.raises(ValueError, match="needs a motif"):
+        lv.plot(color_by="motif_overlap")
+    with pytest.raises(ValueError, match="needs a motif"):
+        lv.plot_plotnine(color_by="motif_overlap")
+    with_motif = store.locus_vplot("chr1:1000-3000", motif="chr1:1980-2000:+")
+    assert with_motif.points["motif_overlap"].notna().all()
+
+
+def test_to_vplot_cpm_uses_the_whole_store_depth(store):
+    lv = store.locus_vplot("chr1:1000-3000", len_range=(20, 250))
+    v = lv.to_vplot(pos_bin=50, len_bin=10)
+    assert lv.n_fragments < store.n_fragments
+    assert v.n_fragments == store.n_fragments
+    cpm = v.normalize("cpm")
+    assert cpm.counts.sum() == pytest.approx(v.counts.sum() / (store.n_fragments / 1e6))

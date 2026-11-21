@@ -179,3 +179,79 @@ def test_diff_cells_empty_in_both_samples_are_zero_at_unequal_depth():
     assert both_empty.sum() > 10
     d = a.diff(b)
     np.testing.assert_array_equal(d.counts[both_empty], 0.0)
+
+
+# ---- stranded stores hold one 5' base per read -------------------------------------------
+
+
+def test_from_arrays_reduces_stranded_read_intervals_to_their_five_prime_end():
+    store = vp.FragmentStore.from_arrays(
+        {"chr1": np.array([100, 200, 300])},
+        {"chr1": np.array([150, 250, 301])},
+        assay="chip_exo",
+        strands={"chr1": np.array([1, -1, -1])},
+    )
+    np.testing.assert_array_equal(store.starts["chr1"], [100, 249, 300])
+    np.testing.assert_array_equal(store.ends["chr1"], store.starts["chr1"] + 1)
+
+    # the minus read's cut now lands where the 5' base is, not at its left edge
+    anchors = pd.DataFrame({"chrom": ["chr1"], "center": [249.5]})
+    mat = store.to_matrix(anchors, flank=2, bin_size=1, feature="cuts_minus")
+    assert mat.values.sum() == 1.0 and mat.values[0, 1] == 1.0
+
+
+def test_from_dataframe_stranded_matches_from_arrays():
+    df = pd.DataFrame({"chrom": ["chr1", "chr1"], "start": [100, 200], "end": [150, 250], "strand": ["+", "-"]})
+    store = vp.FragmentStore.from_dataframe(df, assay="chip_exo", strand_col="strand")
+    np.testing.assert_array_equal(store.starts["chr1"], [100, 249])
+
+
+def test_stranded_constructor_rejects_long_intervals():
+    with pytest.raises(ValueError, match="one 5' base per read"):
+        vp.FragmentStore(
+            {"chr1": np.array([100])}, {"chr1": np.array([150])}, assay="chip_exo",
+            strands={"chr1": np.array([-1])},
+        )
+
+
+# ---- merge --------------------------------------------------------------------------------
+
+
+def test_merge_requires_matching_assays_unless_chosen():
+    atac = vp.FragmentStore.from_arrays({"chr1": np.array([1])}, {"chr1": np.array([100])}, assay="atac")
+    chec = vp.FragmentStore.from_arrays({"chr1": np.array([5])}, {"chr1": np.array([90])}, assay="chec")
+    with pytest.raises(ValueError, match="different assays"):
+        vp.FragmentStore.merge([atac, chec])
+    merged = vp.FragmentStore.merge([atac, chec], assay="generic")
+    assert merged.assay.name == "generic" and merged.n_fragments == 2
+
+
+def test_merge_records_sources():
+    a = vp.FragmentStore.from_arrays({"chr1": np.array([1])}, {"chr1": np.array([100])}, metadata={"source": "a.bam"})
+    b = vp.FragmentStore.from_arrays({"chr1": np.array([5])}, {"chr1": np.array([90])}, metadata={"source": "b.bam"})
+    merged = vp.FragmentStore.merge([a, b])
+    assert merged.metadata["merged_from"] == ["a.bam", "b.bam"]
+
+
+# ---- BED header lines ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reader", ["anchors", "fragments", "peaks"])
+def test_bed_header_line_error_names_file_and_line(tmp_path, reader):
+    path = tmp_path / "with_header.bed"
+    path.write_text("chrom\tstart\tend\nchr1\t100\t200\n")
+    with pytest.raises(ValueError, match=r"with_header\.bed:1: cannot read integer column") as exc:
+        if reader == "anchors":
+            vp.normalize_anchors(path)
+        elif reader == "fragments":
+            vp.FragmentStore.from_fragments_bed(path)
+        else:
+            vp.frip(vp.FragmentStore.from_arrays({"chr1": np.array([1])}, {"chr1": np.array([9])}), path)
+    assert "track" in str(exc.value)
+
+
+def test_bed_comment_and_track_lines_are_still_skipped(tmp_path):
+    path = tmp_path / "ok.bed"
+    path.write_text("# comment\ntrack name=x\nbrowser position chr1:1-10\nchr1\t100\t200\n")
+    assert vp.normalize_anchors(path).n_anchors == 1
+    assert vp.FragmentStore.from_fragments_bed(path).n_fragments == 1

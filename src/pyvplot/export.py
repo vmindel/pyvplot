@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import warnings
 from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
@@ -247,6 +248,16 @@ def to_bigwig(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     header = [(str(c), int(size)) for c, size in chrom_sizes.items()]
+    unknown = sorted(set(df["chrom"]) - {c for c, _ in header})
+    if unknown:
+        shown = ", ".join(repr(c) for c in unknown[:5]) + (" ..." if len(unknown) > 5 else "")
+        n_rows = int(df["chrom"].isin(unknown).sum())
+        warnings.warn(
+            f"{n_rows} bins on chromosomes missing from chrom_sizes ({shown}) are not written "
+            "to the BigWig. Add them to chrom_sizes or restrict the export with chroms=.",
+            UserWarning,
+            stacklevel=2,
+        )
     bw = pyBigWig.open(str(out), "w")
     try:
         bw.addHeader(header)

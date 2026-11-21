@@ -304,3 +304,39 @@ def test_filter_merge_and_dataframe_conversion():
     out_df = merged.to_dataframe()
     assert list(out_df.columns) == ["chrom", "start", "end"]
     assert len(out_df) == 2
+
+
+@pytest.mark.parametrize("name", ["cache.foo", "cache"])
+def test_save_explicit_npz_returns_an_existing_path(tmp_path: Path, name: str):
+    store = FragmentStore(starts={"chr1": np.array([1, 5])}, ends={"chr1": np.array([10, 20])})
+    out = store.save(tmp_path / name, format="npz")
+    assert out.exists() and out.suffix == ".npz"
+    assert FragmentStore.load(out).n_fragments == 2
+    assert [p.name for p in tmp_path.iterdir()] == [out.name]
+
+
+def test_from_bam_threads_do_not_change_the_result(tmp_path: Path):
+    bam = tmp_path / "t.bam"
+    _write_synthetic_paired_bam(bam)
+    one = FragmentStore.from_bam(bam, assay="chec", exclude_chroms={"chrM"})
+    four = FragmentStore.from_bam(bam, assay="chec", exclude_chroms={"chrM"}, threads=4)
+    assert one.chroms == four.chroms and one.n_fragments > 0
+    for c in one.chroms:
+        np.testing.assert_array_equal(one.starts[c], four.starts[c])
+        np.testing.assert_array_equal(one.ends[c], four.ends[c])
+
+
+def test_chrom_buffers_are_compact_and_exact():
+    from pyvplot.store import _ChromBuffers
+
+    buf = _ChromBuffers(stranded=True)
+    buf.add("chr1", 5, 6, -1)
+    buf.add("chr1", 7, 8, 1, count=3)
+    buf.add("chr2", 2_000_000_000, 2_000_000_001, 1)
+    starts, ends, strands = buf.to_numpy()
+    assert starts["chr1"].dtype == np.int32 and strands is not None
+    assert starts["chr1"].tolist() == [5, 7, 7, 7] and ends["chr1"].tolist() == [6, 8, 8, 8]
+    assert strands["chr1"].tolist() == [-1, 1, 1, 1] and starts["chr2"][0] == 2_000_000_000
+    assert buf.starts["chr1"].itemsize == 4  # not a list of Python ints
+    with pytest.raises(OverflowError):
+        buf.add("chr3", 2**31, 2**31 + 1)

@@ -79,3 +79,15 @@ def test_validation_and_register():
         assert get_assay("test_custom_assay").left_shift == 3
     finally:
         ASSAY_PRESETS.pop("test_custom_assay", None)
+
+
+def test_feature_lists_stay_in_sync():
+    from pyvplot import locus
+    from pyvplot.assays import VALID_FEATURES
+    from pyvplot.extract import _FEATURE_CODES
+
+    # every feature the kernels understand is a valid assay default, and the other way round
+    assert set(_FEATURE_CODES) == set(VALID_FEATURES)
+    assert set(locus._FEATURES) <= set(VALID_FEATURES)
+    cfg = AssayConfig(name="x", default_feature="cuts_proximal")
+    assert cfg.default_feature == "cuts_proximal"

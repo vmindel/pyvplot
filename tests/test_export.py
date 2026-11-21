@@ -108,3 +108,36 @@ def test_to_bigwig_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert written["header"] == [("chr1", 1000)]
     assert written["closed"] is True
     assert len(written["entries"][1]) == 3  # type: ignore[index]
+
+
+def test_to_bigwig_warns_about_chromosomes_missing_from_chrom_sizes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    store = FragmentStore(
+        starts={"chr1": np.array([10, 12], dtype=np.int32), "chrUn": np.array([5], dtype=np.int32)},
+        ends={"chr1": np.array([35, 18], dtype=np.int32), "chrUn": np.array([60], dtype=np.int32)},
+        assay="chec",
+    )
+    written: dict[str, object] = {}
+
+    class DummyBW:
+        def addHeader(self, header):
+            pass
+
+        def addEntries(self, chroms, starts, ends, values):
+            written.setdefault("chroms", set()).update(chroms)  # type: ignore[union-attr]
+
+        def close(self):
+            pass
+
+    fake_bw = types.ModuleType("pyBigWig")
+    fake_bw.open = lambda path, mode: DummyBW()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pyBigWig", fake_bw)
+
+    with pytest.warns(UserWarning, match=r"missing from chrom_sizes \('chrUn'\)"):
+        to_bigwig(store, tmp_path / "o.bw", chrom_sizes={"chr1": 1000}, feature="midpoint", bin_size=10)
+    assert written["chroms"] == {"chr1"}
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        to_bigwig(store, tmp_path / "o2.bw", chrom_sizes={"chr1": 1000}, feature="midpoint", bin_size=10, chroms=["chr1"])

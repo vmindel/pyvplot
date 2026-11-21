@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import gzip
 import json
+from array import array
 from collections import defaultdict
 from collections.abc import Collection, Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,52 @@ DEFAULT_SINGLE_EXCLUDE_FLAGS = 0x4 | 0x100 | 0x200 | 0x800
 SAM_DUPLICATE_FLAG = 0x400
 
 _STORE_FORMAT_VERSION = 1
+
+
+class _ChromBuffers:
+    """Compact per-chromosome accumulators (4 bytes per coordinate instead of ~36 for a list of ints)."""
+
+    def __init__(self, stranded: bool) -> None:
+        self.starts: dict[str, array] = defaultdict(lambda: array("i"))
+        self.ends: dict[str, array] = defaultdict(lambda: array("i"))
+        self.strands: dict[str, array] | None = defaultdict(lambda: array("b")) if stranded else None
+
+    def add(self, chrom: str, start: int, end: int, strand: int = 1, count: int = 1) -> None:
+        if count == 1:
+            self.starts[chrom].append(start)
+            self.ends[chrom].append(end)
+            if self.strands is not None:
+                self.strands[chrom].append(strand)
+        else:
+            self.starts[chrom].extend([start] * count)
+            self.ends[chrom].extend([end] * count)
+            if self.strands is not None:
+                self.strands[chrom].extend([strand] * count)
+
+    def to_numpy(self) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], dict[str, np.ndarray] | None]:
+        def _arr(a: array, dtype: Any) -> np.ndarray:
+            return np.frombuffer(a, dtype=dtype).copy() if len(a) else np.empty(0, dtype=dtype)
+
+        starts = {c: _arr(a, np.intc).astype(np.int32, copy=False) for c, a in self.starts.items()}
+        ends = {c: _arr(a, np.intc).astype(np.int32, copy=False) for c, a in self.ends.items()}
+        strands = (
+            {c: _arr(a, np.byte).astype(np.int8, copy=False) for c, a in self.strands.items()}
+            if self.strands is not None
+            else None
+        )
+        return starts, ends, strands
+
+
+def parse_int_columns(parts: list[str], cols: tuple[int, ...], path: Path | str, lineno: int) -> tuple[int, ...]:
+    """Read integer columns of a BED-like line, naming the file and line when one is not a number."""
+    try:
+        return tuple(int(parts[c]) for c in cols)
+    except (ValueError, IndexError) as exc:
+        shown = "\t".join(parts)[:80]
+        raise ValueError(
+            f"{path}:{lineno}: cannot read integer column(s) {[c + 1 for c in cols]} from "
+            f"{shown!r}. Header lines must start with '#', 'track' or 'browser'."
+        ) from exc
 
 
 def _dedup_sorted_chrom(
@@ -139,6 +186,13 @@ class FragmentStore:
                 if np.any(e <= s):
                     raise ValueError(
                         f"Chromosome {chrom!r}: all fragments must satisfy start < end."
+                    )
+                if st is not None and np.any(e - s != 1):
+                    raise ValueError(
+                        f"Chromosome {chrom!r}: a stranded store holds one 5' base per read "
+                        "([pos, pos + 1)), but some intervals are longer. Build it with "
+                        "FragmentStore.from_arrays() or from_dataframe(), which reduce read "
+                        "intervals to their 5' end."
                     )
                 if sort:
                     s, e, st = _sort_chrom_arrays(s, e, st)
@@ -287,7 +341,11 @@ class FragmentStore:
         dedup: bool = False,
         metadata: dict[str, Any] | None = None,
     ) -> FragmentStore:
-        """Construct a [`FragmentStore`][pyvplot.FragmentStore] from per-chromosome coordinate arrays."""
+        """Construct a [`FragmentStore`][pyvplot.FragmentStore] from per-chromosome coordinate arrays.
+
+        With ``strands`` (``+1`` / ``-1``) the store holds one 5' base per read, so read
+        intervals are reduced to their 5' end: ``start`` for ``+`` reads, ``end - 1`` for ``-``.
+        """
         cfg = get_assay(assay)
         out_starts: dict[str, np.ndarray] = {}
         out_ends: dict[str, np.ndarray] = {}
@@ -297,6 +355,16 @@ class FragmentStore:
             s = np.asarray(starts[chrom], dtype=np.int64)
             e = np.asarray(ends[chrom], dtype=np.int64)
             st = np.asarray(strands[chrom], dtype=np.int8) if strands is not None else None
+
+            if st is not None and len(s) > 0:
+                if len(st) != len(s) or len(e) != len(s):
+                    raise ValueError(
+                        f"Chromosome {chrom!r}: starts, ends and strands must have equal lengths."
+                    )
+                # Stranded stores hold the 5' base of each read: the first base of a + read,
+                # the last base of a - read. A no-op for inputs that already are 1 bp long.
+                pos = np.where(st >= 0, s, e - 1)
+                s, e = pos, pos + 1
 
             if apply_shift and len(s) > 0:
                 if cfg.paired_end:
@@ -397,6 +465,7 @@ class FragmentStore:
         exclude_chroms: Collection[str] | None = None,
         pairing: str = "read1",
         apply_shift: bool = True,
+        threads: int = 1,
     ) -> FragmentStore:
         """Ingest fragments from a BAM/CRAM file via ``pysam``.
 
@@ -431,6 +500,10 @@ class FragmentStore:
         apply_shift:
             Whether to apply ``assay.left_shift`` / ``assay.right_shift``
             during ingestion (default ``True``).
+        threads:
+            Extra threads pysam uses to decompress the BAM (default ``1``). The read
+            loop itself stays single-threaded, but decompression is a large share of
+            the time on deep libraries.
         """
         try:
             import pysam
@@ -469,12 +542,10 @@ class FragmentStore:
         left_shift = cfg.left_shift if apply_shift else 0
         right_shift = cfg.right_shift if apply_shift else 0
 
-        raw_starts: dict[str, list[int]] = defaultdict(list)
-        raw_ends: dict[str, list[int]] = defaultdict(list)
-        raw_strands: dict[str, list[int]] | None = defaultdict(list) if not cfg.paired_end else None
+        buf = _ChromBuffers(stranded=not cfg.paired_end)
 
         path_str = str(bam_path)
-        with pysam.AlignmentFile(path_str, "rb") as bam:
+        with pysam.AlignmentFile(path_str, "rb", threads=max(1, int(threads))) as bam:
             ref_names = bam.references
             allowed_tids: set[int] = set()
             for tid, rname in enumerate(ref_names):
@@ -505,11 +576,7 @@ class FragmentStore:
                         st = 1
                     if pos < 0:
                         continue
-                    chrom = ref_names[tid]
-                    raw_starts[chrom].append(pos)
-                    raw_ends[chrom].append(pos + 1)
-                    assert raw_strands is not None
-                    raw_strands[chrom].append(st)
+                    buf.add(ref_names[tid], pos, pos + 1, st)
 
             elif pairing == "read1":
                 for read in bam.fetch(until_eof=True):
@@ -540,9 +607,7 @@ class FragmentStore:
                     frag_len = end - start
                     if start < 0 or frag_len < min_len or frag_len > max_len:
                         continue
-                    chrom = ref_names[tid]
-                    raw_starts[chrom].append(start)
-                    raw_ends[chrom].append(end)
+                    buf.add(ref_names[tid], start, end)
 
             else:  # pairing == "mate"
                 pending: dict[tuple[int, str], tuple[int, int]] = {}
@@ -569,17 +634,9 @@ class FragmentStore:
                         frag_len = end - start
                         if start < 0 or frag_len < min_len or frag_len > max_len:
                             continue
-                        chrom = ref_names[tid]
-                        raw_starts[chrom].append(start)
-                        raw_ends[chrom].append(end)
+                        buf.add(ref_names[tid], start, end)
 
-        starts_np = {c: np.asarray(v, dtype=np.int32) for c, v in raw_starts.items()}
-        ends_np = {c: np.asarray(v, dtype=np.int32) for c, v in raw_ends.items()}
-        strands_np = (
-            {c: np.asarray(v, dtype=np.int8) for c, v in raw_strands.items()}
-            if raw_strands is not None
-            else None
-        )
+        starts_np, ends_np, strands_np = buf.to_numpy()
 
         return cls(
             starts=starts_np,
@@ -644,12 +701,10 @@ class FragmentStore:
             is_bedpe = True
 
         opener = gzip.open if path_obj.suffix == ".gz" else open
-        raw_starts: dict[str, list[int]] = defaultdict(list)
-        raw_ends: dict[str, list[int]] = defaultdict(list)
-        raw_strands: dict[str, list[int]] | None = defaultdict(list) if not cfg.paired_end else None
+        buf = _ChromBuffers(stranded=not cfg.paired_end)
 
         with opener(path_obj, "rt", encoding="utf-8") as fh:
-            for line in fh:
+            for lineno, line in enumerate(fh, start=1):
                 if not line or line[0] == "#" or line.startswith(("track ", "browser ")):
                     continue
                 parts = line.rstrip("\r\n").split("\t")
@@ -684,8 +739,7 @@ class FragmentStore:
                         continue
                     if chrom in drop_chroms:
                         continue
-                    s1, e1 = int(parts[1]), int(parts[2])
-                    s2, e2 = int(parts[4]), int(parts[5])
+                    s1, e1, s2, e2 = parse_int_columns(parts, (1, 2, 4, 5), path_obj, lineno)
                     start = min(s1, s2) + left_shift
                     end = max(e1, e2) + right_shift
                     count = 1
@@ -696,8 +750,7 @@ class FragmentStore:
                         continue
                     if chrom in drop_chroms:
                         continue
-                    start = int(parts[1])
-                    end = int(parts[2])
+                    start, end = parse_int_columns(parts, (1, 2), path_obj, lineno)
                     st = 1
                     if not cfg.paired_end:
                         if (len(parts) >= 6 and parts[5] == "-") or (len(parts) >= 4 and parts[3] == "-"):
@@ -725,24 +778,9 @@ class FragmentStore:
                     if max_len is not None and frag_len > max_len:
                         continue
 
-                if count == 1:
-                    raw_starts[chrom].append(start)
-                    raw_ends[chrom].append(end)
-                    if raw_strands is not None:
-                        raw_strands[chrom].append(st)
-                else:
-                    raw_starts[chrom].extend([start] * count)
-                    raw_ends[chrom].extend([end] * count)
-                    if raw_strands is not None:
-                        raw_strands[chrom].extend([st] * count)
+                buf.add(chrom, start, end, st, count)
 
-        starts_np = {c: np.asarray(v, dtype=np.int32) for c, v in raw_starts.items()}
-        ends_np = {c: np.asarray(v, dtype=np.int32) for c, v in raw_ends.items()}
-        strands_np = (
-            {c: np.asarray(v, dtype=np.int8) for c, v in raw_strands.items()}
-            if raw_strands is not None
-            else None
-        )
+        starts_np, ends_np, strands_np = buf.to_numpy()
 
         return cls(
             starts=starts_np,
@@ -768,7 +806,8 @@ class FragmentStore:
             Destination path. Format is inferred from suffix (``.npz`` or
             ``.parquet``) unless explicitly passed via ``format``.
         format:
-            ``"npz"`` or ``"parquet"`` (optional).
+            ``"npz"`` or ``"parquet"`` (optional). A ``.npz`` file always gets the
+            ``.npz`` suffix; use the returned path to load it back.
         compressed:
             For ``.npz``, use ``np.savez_compressed`` instead of ``np.savez``
             (smaller files, slightly slower load).
@@ -777,12 +816,13 @@ class FragmentStore:
         fmt = format.lower() if format is not None else None
         if fmt is None:
             suffix = out_path.suffix.lower()
-            if suffix in {".parquet", ".pq"}:
-                fmt = "parquet"
+            fmt = "parquet" if suffix in {".parquet", ".pq"} else "npz"
+        if fmt == "npz" and out_path.suffix.lower() != ".npz":
+            # np.savez appends ".npz" itself; do it here so the returned path exists.
+            if format is None:
+                out_path = out_path.with_suffix(".npz")
             else:
-                fmt = "npz"
-                if suffix != ".npz":
-                    out_path = out_path.with_suffix(".npz")
+                out_path = out_path.with_name(out_path.name + ".npz")
 
         meta_payload = {
             "version": _STORE_FORMAT_VERSION,
@@ -1077,9 +1117,9 @@ class FragmentStore:
     def extract_events(
         self,
         anchors: Any,
-        flank: int = 300,
-        upstream: int | None = None,
-        downstream: int | None = None,
+        flank: float = 300,
+        upstream: float | None = None,
+        downstream: float | None = None,
         len_range: tuple[int, int] | str | None = None,
         overlap_mode: str = "midpoint",
         motif_overlap: str | None = None,
@@ -1126,6 +1166,19 @@ class FragmentStore:
             expected_nrl_range=expected_nrl_range, use_numba=use_numba,
         )
 
+    @overload
+    def frip(self, peaks: Any, mode: str = ..., return_per_peak: Literal[False] = ...) -> float: ...
+
+    @overload
+    def frip(
+        self, peaks: Any, mode: str = ..., *, return_per_peak: Literal[True]
+    ) -> tuple[float, np.ndarray]: ...
+
+    @overload
+    def frip(
+        self, peaks: Any, mode: str = ..., return_per_peak: bool = ...
+    ) -> float | tuple[float, np.ndarray]: ...
+
     def frip(
         self,
         peaks: Any,
@@ -1144,16 +1197,35 @@ class FragmentStore:
         return qc_summary(self, peaks=peaks)
 
     @classmethod
-    def merge(cls, stores: Iterable[FragmentStore], dedup: bool = False) -> FragmentStore:
-        """Merge multiple [`FragmentStore`][pyvplot.FragmentStore] instances into one."""
+    def merge(
+        cls,
+        stores: Iterable[FragmentStore],
+        dedup: bool = False,
+        assay: str | AssayConfig | None = None,
+    ) -> FragmentStore:
+        """Merge multiple [`FragmentStore`][pyvplot.FragmentStore] instances into one.
+
+        All stores must share one assay configuration (and all be stranded or none);
+        otherwise pass ``assay=`` to say which one the merged store should carry. The
+        merged store records the ``source`` of each input in ``metadata["merged_from"]``.
+        """
         store_list = list(stores)
         if not store_list:
             raise ValueError("Cannot merge an empty collection of FragmentStores.")
-        assay = store_list[0].assay
         is_stranded = store_list[0].is_stranded
         for st in store_list[1:]:
             if st.is_stranded != is_stranded:
                 raise ValueError("Cannot merge stranded and unstranded FragmentStores.")
+        if assay is None:
+            assay_cfg = store_list[0].assay
+            for st in store_list[1:]:
+                if st.assay != assay_cfg:
+                    raise ValueError(
+                        f"Cannot merge stores with different assays ({assay_cfg.name!r} vs "
+                        f"{st.assay.name!r}); pass assay=... to choose the merged store's assay."
+                    )
+        else:
+            assay_cfg = get_assay(assay)
 
         all_chroms: list[str] = []
         seen: set[str] = set()
@@ -1180,4 +1252,12 @@ class FragmentStore:
                 ]
                 strands[c] = np.concatenate(t_parts) if t_parts else np.empty(0, dtype=np.int8)
 
-        return cls(starts=starts, ends=ends, assay=assay, strands=strands, sort=True, dedup=dedup)
+        return cls(
+            starts=starts,
+            ends=ends,
+            assay=assay_cfg,
+            strands=strands,
+            metadata={"source_type": "merge", "merged_from": [st.metadata.get("source") for st in store_list]},
+            sort=True,
+            dedup=dedup,
+        )

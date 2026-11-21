@@ -6,7 +6,16 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 VALID_FEATURES = frozenset(
-    {"midpoint", "cuts", "cuts_plus", "cuts_minus", "cuts_stranded", "coverage"}
+    {
+        "midpoint",
+        "cuts",
+        "cuts_plus",
+        "cuts_minus",
+        "cuts_stranded",
+        "coverage",
+        "cuts_proximal",
+        "cuts_distal",
+    }
 )
 
 
@@ -27,7 +36,7 @@ class AssayConfig:
     default_feature:
         Default geometric feature extracted for matrices and profiles:
         ``"midpoint"``, ``"cuts"``, ``"cuts_plus"``, ``"cuts_minus"``,
-        ``"cuts_stranded"``, or ``"coverage"``.
+        ``"cuts_stranded"``, ``"cuts_proximal"``, ``"cuts_distal"`` or ``"coverage"``.
     paired_end:
         Whether fragments are paired-end intervals ``[start, end)`` (``True``)
         or stranded single-end 5' cleavage events (``False``, e.g., ChIP-exo).

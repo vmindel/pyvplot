@@ -101,3 +101,27 @@ def test_phasogram_recovers_true_nrl_and_numba_parity():
     assert abs(res_nb.nrl_fft - true_nrl) <= 4.0
     assert res_nb.r_squared is not None and res_nb.r_squared > 0.99
     assert len(res_nb.peak_positions) >= 3
+
+
+@pytest.mark.parametrize("mode", ["midpoint", "overlap"])
+def test_frip_per_peak_with_non_default_index(mode: str):
+    store = FragmentStore(
+        starts={"chr1": np.array([100, 500, 900, 5000], dtype=np.int32)},
+        ends={"chr1": np.array([150, 550, 950, 5050], dtype=np.int32)},
+        assay="generic",
+    )
+    peaks = pd.DataFrame(
+        {
+            "chrom": ["chr1"] * 4,
+            "start": [0, 450, 880, 4900],
+            "end": [200, 600, 1000, 5100],
+            "score": [1, 9, 9, 9],
+        }
+    )
+    sub = peaks[peaks["score"] > 5]  # index 1, 2, 3
+    score, per_peak = frip(store, sub, mode=mode, return_per_peak=True)
+    assert per_peak.tolist() == [1, 1, 1]
+    assert score == pytest.approx(3 / 4)
+    # same answer as the unfiltered frame restricted to those rows
+    _, full = frip(store, peaks, mode=mode, return_per_peak=True)
+    assert full[1:].tolist() == per_peak.tolist()
