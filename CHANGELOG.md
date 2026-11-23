@@ -5,6 +5,9 @@
 ### Added (bias correction helpers)
 - `extract_anchor_sequences` extracts 5'->3' anchor-oriented DNA sequences (with edge-exact k-mer padding and `-` strand reverse-complementation) from a genome FASTA or `{chrom: seq}` dict. `KmerBiasTable.correct_matrix` accepts a genome FASTA/dict directly when `anchors=` is provided (it must be the table the matrix was built from, in the same order, or it raises), and `KmerBiasTable.correct_footprint` bias-corrects a `CutSiteFootprint` (strand-split or combined).
 
+### Changed (locus end labels)
+- With a motif, `locus_vplot(feature="cuts_plus")` / `"cuts_minus"` label their points `upstream` / `downstream` (in the motif's 5'->3' orientation) instead of `left` / `right`; without a motif they stay `left` / `right`. Use the new names as `palette=` keys for motif plots.
+
 ### Fixed (single-locus, footprint score, and BED anchors)
 - `locus_vplot` with a `-` strand motif and `coords="genomic"` now preserves the motif's 5'->3' biological orientation for `cuts_plus`/`cuts_minus` and proximal/distal tie-breaking.
 - `LocusVPlot.to_vplot` uses strict half-open length and position bins `[min_len, max_len)` matching `store.vplot` (instead of `np.histogram2d`'s closed upper bin) and populates `genome_len_counts` so `normalize("expected", expected_from="genome")` works. The store's fragment lengths are kept as a 1-bp histogram, not copied into every `LocusVPlot`.

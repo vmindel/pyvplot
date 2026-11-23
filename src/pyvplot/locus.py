@@ -53,8 +53,10 @@ class LocusVPlot:
     ----------
     points:
         One row per plotted point: ``x`` (plot coordinate), ``pos`` (genomic
-        coordinate, 0-based), ``frag_len``, ``end`` (``"midpoint"``, ``"left"`` /
-        ``"right"``, or with a motif ``"proximal"`` / ``"distal"``) and ``motif_overlap``
+        coordinate, 0-based), ``frag_len``, ``end`` (``"midpoint"``; ``"left"`` /
+        ``"right"`` without a motif; with a motif ``"proximal"`` / ``"distal"`` for
+        ``cuts`` and ``"upstream"`` / ``"downstream"`` for ``cuts_plus`` / ``cuts_minus``,
+        in the motif's 5'->3' orientation) and ``motif_overlap``
         (``"full"``, ``"partial"`` or ``"none"``, per fragment; missing without a motif).
     chrom, start, end:
         The locus, 0-based half-open.
@@ -288,8 +290,10 @@ def locus_vplot(
             "midpoint": [("rel_mid", "midpoint")],
             "cuts": [("rel_proximal", "proximal"), ("rel_distal", "distal")] if has_motif
             else [("rel_left", "left"), ("rel_right", "right")],
-            "cuts_plus": [("rel_left", "left")],
-            "cuts_minus": [("rel_right", "right")],
+            # With a motif these ends follow its 5'->3' orientation, so on a '-' motif the
+            # upstream end is the fragment's genomic right end: "left"/"right" would mislead.
+            "cuts_plus": [("rel_left", "upstream" if has_motif else "left")],
+            "cuts_minus": [("rel_right", "downstream" if has_motif else "right")],
             "cuts_proximal": [("rel_proximal", "proximal")],
             "cuts_distal": [("rel_distal", "distal")],
         }[feature]

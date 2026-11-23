@@ -90,7 +90,7 @@ most common length within 20 bp of the site: 67.5 bp
 
 ## One locus: every fragment, or one motif
 
-The aggregate functions sum over anchors. `locus_vplot` keeps one window unaggregated: each fragment is a point at (position, length). Without a motif it shows the whole window in genomic coordinates; with a motif it is centred on it, and `feature="cuts"` labels each end `proximal` (nearer the motif centre) or `distal`.
+The aggregate functions sum over anchors. `locus_vplot` keeps one window unaggregated: each fragment is a point at (position, length). Without a motif it shows the whole window in genomic coordinates; with a motif it is centred on it, and `feature="cuts"` labels each end `proximal` (nearer the motif centre) or `distal`. `cuts_plus` / `cuts_minus` are labelled `upstream` / `downstream` in the motif's 5'→3' orientation, so on a `-` motif the upstream end is the fragment's genomic right end, with `coords="genomic"` too.
 
 ```python
 site = anchors.iloc[3]

@@ -241,3 +241,21 @@ def test_to_vplot_cuts_at_max_len_when_range_is_not_a_multiple_of_len_bin():
     v = lv.to_vplot(pos_bin=10, len_bin=30, min_len=20, max_len=100)
     assert v.counts.sum() == 1.0
     np.testing.assert_array_equal(v.genome_len_counts, [0.0, 0.0, 1.0])
+
+
+def test_motif_cut_ends_are_labelled_upstream_downstream():
+    from matplotlib.colors import to_hex
+
+    import pyvplot as vp
+
+    # '-' motif [995, 1005): upstream is the genomic right, so fragment [985, 1030)'s upstream end is 1030.
+    st = vp.FragmentStore.from_arrays({"chr1": np.array([985])}, {"chr1": np.array([1030])})
+    for coords in ("genomic", "relative"):
+        up = st.locus_vplot("chr1:950-1050", motif="chr1:995-1005:-", feature="cuts_plus", coords=coords)
+        dn = st.locus_vplot("chr1:950-1050", motif="chr1:995-1005:-", feature="cuts_minus", coords=coords)
+        assert up.points["end"].tolist() == ["upstream"] and up.points["pos"].tolist() == [1030.0]
+        assert dn.points["end"].tolist() == ["downstream"] and dn.points["pos"].tolist() == [985.0]
+    fig, ax = up.plot(palette={"upstream": "#000000"})
+    assert {c.get_label(): to_hex(c.get_facecolor()[0], keep_alpha=False) for c in ax.collections}["upstream"] == "#000000"
+    # without a motif the ends are still genomic left/right
+    assert st.locus_vplot("chr1:950-1050", feature="cuts_plus").points["end"].tolist() == ["left"]
