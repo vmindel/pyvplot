@@ -235,22 +235,36 @@ def extract_anchor_sequences(
     chrom_cache: dict[str, str | None] = {}
     out: list[str] = []
 
+    width = up + dn + pad_l + pad_r
     for i in range(norm.n_anchors):
         chrom = str(norm.chroms[i])
-        c = int(np.floor(float(norm.centers[i])))
-        st = int(norm.strands[i])
-        if st >= 0 or not orient:
-            g_start = c - up - pad_l
-            g_end = c + dn + pad_r
-            sub = _fetch_subseq(genome, chrom_cache, chrom, g_start, g_end)
+        c = float(norm.centers[i])
+        if int(norm.strands[i]) >= 0 or not orient:
+            # extract_events puts the cut at boundary b in bin floor(b - c + up), so bin 0 is
+            # boundary ceil(c - up). Centres are half-integers for odd-width motifs, where
+            # floor(c) - up would shift every k-mer by one base.
+            g_start = int(np.ceil(c - up)) - pad_l
+            sub = _fetch_subseq(genome, chrom_cache, chrom, g_start, g_start + width)
         else:
-            # For a '-' anchor, anchor-oriented [-up - pad_l, +dn + pad_r) corresponds to
-            # genomic [c - dn - pad_r, c + up + pad_l) reverse-complemented.
-            g_start = c - dn - pad_r
-            g_end = c + up + pad_l
-            sub = reverse_complement(_fetch_subseq(genome, chrom_cache, chrom, g_start, g_end))
+            # '-' anchors: bin floor(c - b + up), so bin 0 is boundary floor(c + up), and the
+            # window is read reverse-complemented.
+            g_end = int(np.floor(c + up)) + pad_l
+            sub = reverse_complement(_fetch_subseq(genome, chrom_cache, chrom, g_end - width, g_end))
         out.append(sub)
     return out
+
+
+def _check_anchor_rows(anchors: Any, signal_matrix: SignalMatrix) -> None:
+    """Raise unless ``anchors`` lists the matrix's rows in the same order."""
+    idx = normalize_anchors(anchors).region_index
+    if len(idx) != signal_matrix.n_anchors or not np.array_equal(
+        np.asarray(idx).astype(str), np.asarray(signal_matrix.region_index).astype(str)
+    ):
+        raise ValueError(
+            "`anchors` must be the anchor table the matrix was built from, in the same order: "
+            f"got {len(idx)} anchors for a matrix with {signal_matrix.n_anchors} rows, or the "
+            "anchor IDs differ. Sequences are matched to matrix rows by position."
+        )
 
 
 _FEATURE_FRAME = {
@@ -599,6 +613,7 @@ class KmerBiasTable:
                 f"Sequence bias correction requires bin_size=1, got bin_size={signal_matrix.bin_size}."
             )
         if anchors is not None:
+            _check_anchor_rows(anchors, signal_matrix)
             seq_list: Sequence[str] = extract_anchor_sequences(
                 anchors,
                 sequences,
@@ -694,6 +709,7 @@ class KmerBiasTable:
 
         if anchors is not None:
             m_ref = footprint.matrix_combined
+            _check_anchor_rows(anchors, m_ref)
             seq_list: Sequence[str] = extract_anchor_sequences(
                 anchors,
                 sequences,

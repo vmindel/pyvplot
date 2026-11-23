@@ -290,3 +290,39 @@ def test_extract_anchor_sequences_and_correct_footprint():
     fp_unsplit_cor = bias.correct_footprint(fp_unsplit, seqs)
     assert fp_unsplit_cor.plus is None
     np.testing.assert_allclose(fp_unsplit_cor.combined, fp_unsplit_cor.matrix_combined.values.mean(axis=0))
+
+
+@pytest.mark.parametrize("width", [20, 19])  # integer and half-integer anchor centre
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_extract_anchor_sequences_aligns_kmers_with_matrix_bins(width, strand):
+    import pandas as pd
+    import pyvplot as vp
+
+    rng = np.random.default_rng(3)
+    g = "".join(rng.choice(list("ACGT"), 3000))
+    k, off = 4, 2
+    tab = KmerBiasTable(k=k, weights=rng.uniform(0.2, 5.0, 4**k), cut_offset=off)
+    anchors = pd.DataFrame({"chrom": ["chr1"], "start": [1490], "end": [1490 + width], "strand": [strand]})
+    for s, e in [(1471, 1530), (1452, 1499), (1503, 1541)]:
+        store = FragmentStore({"chr1": np.array([s])}, {"chr1": np.array([e])}, assay="chec")
+        for feat in ("cuts_plus", "cuts_minus"):
+            m = vp.to_matrix(store, anchors, upstream=60, downstream=60, bin_size=1, feature=feat)
+            (hit,) = np.flatnonzero(m.values[0])
+            cor = tab.correct_matrix(m, {"chr1": g}, anchors=anchors, pseudocount=0, preserve_scale=False)
+            left = (feat == "cuts_plus") == (strand == "+")
+            kmer = g[s - off : s - off + k] if left else reverse_complement(g[e - k + off : e + off])
+            assert 1.0 / cor.values[0, hit] == pytest.approx(tab.score_sequence(kmer)[off])
+
+
+def test_correct_matrix_rejects_anchors_that_do_not_match_rows():
+    import pandas as pd
+
+    g = {"chr1": "ACGT" * 500}
+    anchors = pd.DataFrame({"chrom": ["chr1", "chr1"], "center": [500, 1200], "strand": ["+", "-"]}, index=["a", "b"])
+    store = FragmentStore({"chr1": np.array([480, 1190])}, {"chr1": np.array([540, 1260])}, assay="chec")
+    mat = store.to_matrix(anchors, flank=30, bin_size=1, feature="cuts")
+    tab = KmerBiasTable.from_dict({"GATC": 4.0}, cut_offset=2)
+    with pytest.raises(ValueError, match="same order"):
+        tab.correct_matrix(mat, g, anchors=anchors.iloc[::-1])
+    with pytest.raises(ValueError, match="same order"):
+        tab.correct_footprint(store.cut_site_footprint(anchors, flank=30), g, anchors=anchors.iloc[:1])

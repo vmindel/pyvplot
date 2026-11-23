@@ -228,3 +228,15 @@ def test_to_vplot_half_open_max_len_and_genome_expected(store):
     v_exp = v_full.normalize("expected", expected_from="genome")
     assert v_exp.normalization == "expected:genome"
     assert np.isfinite(v_exp.counts).all()
+
+
+def test_to_vplot_cuts_at_max_len_when_range_is_not_a_multiple_of_len_bin():
+    import pyvplot as vp
+
+    # Lengths 95 and 104: max_len=100 with len_bin=30 has a last edge at 110, but 104 is out
+    # of [min_len, max_len), in the locus counts and in genome_len_counts alike.
+    st = vp.FragmentStore.from_arrays({"chr1": np.array([950, 950])}, {"chr1": np.array([1045, 1054])})
+    lv = st.locus_vplot("chr1:900-1100", motif="chr1:995-1005:+", feature="midpoint")
+    v = lv.to_vplot(pos_bin=10, len_bin=30, min_len=20, max_len=100)
+    assert v.counts.sum() == 1.0
+    np.testing.assert_array_equal(v.genome_len_counts, [0.0, 0.0, 1.0])

@@ -84,7 +84,10 @@ class LocusVPlot:
     motif_overlap: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     store_n_fragments: int = 0
-    _store_lengths: np.ndarray | None = field(default=None, repr=False)
+    # 1-bp histogram of every fragment length in the source store (index = length), for
+    # to_vplot()'s genome_len_counts. A histogram, not the lengths: a few kB instead of 4 bytes
+    # per fragment held by every LocusVPlot.
+    _genome_len_hist: np.ndarray | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         mt = "" if self.motif is None else f", motif={self.motif[0]}-{self.motif[1]}({self.motif_strand})"
@@ -146,19 +149,16 @@ class LocusVPlot:
             xs = self.points["x"].to_numpy(dtype=np.float64)
             li = np.floor((lens - lo) / len_bin).astype(np.int64)
             pi = np.floor((xs - x0) / pos_bin).astype(np.int64)
-            ok = (lens >= lo) & (lens < len_edges[-1]) & (li >= 0) & (li < n_len) & (xs >= x0) & (xs < pos_edges[-1]) & (pi >= 0) & (pi < n_pos)
+            ok = (lens >= lo) & (lens < hi) & (li >= 0) & (li < n_len) & (xs >= x0) & (xs < pos_edges[-1]) & (pi >= 0) & (pi < n_pos)
             if np.any(ok):
                 np.add.at(counts, (li[ok], pi[ok]), 1.0)
 
         genome_len_counts: np.ndarray | None = None
-        if self._store_lengths is not None:
-            genome_len_counts = np.zeros(n_len, dtype=np.float64)
-            if len(self._store_lengths) > 0:
-                in_range = (self._store_lengths >= lo) & (self._store_lengths < len_edges[-1])
-                if np.any(in_range):
-                    l_bins = (self._store_lengths[in_range] - lo) // len_bin
-                    l_bins = l_bins[(l_bins >= 0) & (l_bins < n_len)]
-                    genome_len_counts = np.bincount(l_bins, minlength=n_len).astype(np.float64)
+        if self._genome_len_hist is not None:
+            # Same [lo, hi) cut as the locus counts and store.vplot; the last bin may be short.
+            cum = np.concatenate([[0], np.cumsum(self._genome_len_hist)])
+            e = np.clip(np.minimum(lo + len_bin * np.arange(n_len + 1), hi), 0, len(cum) - 1)
+            genome_len_counts = (cum[e[1:]] - cum[e[:-1]]).astype(np.float64)
 
         return VPlot(
             counts=counts,
@@ -333,5 +333,5 @@ def locus_vplot(
         assay=store.assay.name,
         motif_overlap=motif_overlap,
         store_n_fragments=store.n_fragments,
-        _store_lengths=store.lengths(),
+        _genome_len_hist=np.bincount(store.lengths()) if store.n_fragments else np.zeros(0, dtype=np.int64),
     )
