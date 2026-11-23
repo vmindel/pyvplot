@@ -17,8 +17,14 @@ frags = vp.FragmentStore.from_bam(
     exclude_chroms={"chrM", "MT"},
     pairing="read1",            # "read1" (fast O(1) memory) or "mate" (checks both mates' MAPQ)
     apply_shift=True,           # applies assay.left_shift / assay.right_shift ONCE
+    threads=4,                  # extra BAM decompression threads (the read loop is single-threaded)
+    verbose=True,               # progress on stderr per chromosome / every 5M records + final summary
 )
+frags.metadata["ingest_stats"]  # always recorded: records_read, skipped_flag/pairing/mapq/chrom/length,
+                                # fragments_parsed, removed_coord_dedup, removed_blacklist, fragments_kept
 ```
+
+`ingest_stats` counts BAM **records**: with `pairing="read1"` every mate-2 record lands in `skipped_pairing`, so about half the records show up there on a clean BAM. That is expected, not data loss. `FragmentStore.merge` keeps each input's metadata in `metadata["merged_inputs"]` (in input order), so per-replicate `ingest_stats` and `exclude_regions` survive merging and `.save()`; e.g. `pd.DataFrame([m["ingest_stats"] for m in merged.metadata["merged_inputs"]])`.
 
 ## From BED, 10x/ArchR `.frag.tsv.gz`, or BEDPE
 

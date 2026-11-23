@@ -613,6 +613,26 @@ _LOCUS_COLORS = {
     "left": "#d73027",
     "right": "#4575b4",
 }
+_LOCUS_OVERLAP_COLORS = {"full": "#b2182b", "partial": "#ef8a62", "none": "#999999"}
+
+
+def _locus_palette(color_by: str | None, palette: dict[str, Any] | None) -> dict[str, Any]:
+    """Default colours for ``color_by``, with ``palette`` merged over them (unknown levels raise)."""
+    if color_by is None:
+        if palette is not None:
+            raise ValueError("palette= needs color_by='end' or 'motif_overlap'; with color_by=None there are no levels.")
+        return dict(_LOCUS_COLORS)
+    defaults = _LOCUS_COLORS if color_by == "end" else _LOCUS_OVERLAP_COLORS
+    merged = dict(defaults)
+    if palette is not None:
+        unknown = set(palette) - set(defaults)
+        if unknown:
+            raise ValueError(
+                f"palette has levels {sorted(unknown)} that color_by={color_by!r} does not use; "
+                f"valid levels: {list(defaults)}."
+            )
+        merged.update(palette)
+    return merged
 
 
 def _locus_labels(lv: LocusVPlot) -> tuple[str, str]:
@@ -631,13 +651,20 @@ def plot_locus_matplotlib(
     title: str | None = None,
     motif_color: str = "#f2c14e",
     figsize: tuple[float, float] = (8.0, 4.0),
+    palette: dict[str, Any] | None = None,
 ) -> tuple[Any, Any]:
     """Scatter of a [`LocusVPlot`][pyvplot.LocusVPlot] with ``matplotlib``; the motif is shaded.
 
     ``color_by`` is ``"end"`` (proximal/distal, left/right or midpoint), ``"motif_overlap"``
-    or ``None`` for a single colour. Returns ``(fig, ax)``.
+    or ``None`` for a single colour. ``palette`` maps levels to colours and is merged over
+    the defaults, so ``{"proximal": "#e66101"}`` changes one level only. Levels for
+    ``"end"``: ``midpoint``, ``proximal``, ``distal``, ``left``, ``right``; for
+    ``"motif_overlap"``: ``full``, ``partial``, ``none``. Returns ``(fig, ax)``.
     """
     plt = _require_matplotlib()
+    if color_by not in {"end", "motif_overlap", None}:
+        raise ValueError(f"color_by must be 'end', 'motif_overlap' or None, got {color_by!r}.")
+    colors = _locus_palette(color_by, palette)
     if color_by == "motif_overlap" and lv.motif is None:
         raise ValueError("color_by='motif_overlap' needs a motif; pass motif=... to locus_vplot.")
     if ax is None:
@@ -652,14 +679,11 @@ def plot_locus_matplotlib(
     pts = lv.points
     if color_by is None or len(pts) == 0:
         ax.scatter(pts["x"], pts["frag_len"], s=size, alpha=alpha, color=_LOCUS_COLORS["midpoint"], linewidths=0)
-    elif color_by in {"end", "motif_overlap"}:
-        palette = _LOCUS_COLORS if color_by == "end" else {"full": "#b2182b", "partial": "#ef8a62", "none": "#999999"}
+    else:
         for level in pts[color_by].cat.categories:
             sub = pts[pts[color_by] == level]
             if len(sub):
-                ax.scatter(sub["x"], sub["frag_len"], s=size, alpha=alpha, color=palette[level], linewidths=0, label=str(level))
-    else:
-        raise ValueError(f"color_by must be 'end', 'motif_overlap' or None, got {color_by!r}.")
+                ax.scatter(sub["x"], sub["frag_len"], s=size, alpha=alpha, color=colors[level], linewidths=0, label=str(level))
 
     ax.set_xlim(*lv.xlim)
     xlabel, ylabel = _locus_labels(lv)
@@ -677,11 +701,17 @@ def plot_locus_plotnine(
     size: float = 1.2,
     alpha: float = 0.6,
     title: str | None = None,
+    palette: dict[str, Any] | None = None,
 ) -> Any:
-    """Scatter of a [`LocusVPlot`][pyvplot.LocusVPlot] with ``plotnine``; the motif is shaded."""
+    """Scatter of a [`LocusVPlot`][pyvplot.LocusVPlot] with ``plotnine``; the motif is shaded.
+
+    ``palette`` works as in ``LocusVPlot.plot``
+    (merged over the defaults, applied with ``scale_color_manual``).
+    """
     p9 = _require_plotnine()
     if color_by not in {"end", "motif_overlap", None}:
         raise ValueError(f"color_by must be 'end', 'motif_overlap' or None, got {color_by!r}.")
+    colors = _locus_palette(color_by, palette)
     if color_by == "motif_overlap" and lv.motif is None:
         raise ValueError("color_by='motif_overlap' needs a motif; pass motif=... to locus_vplot.")
     xlabel, ylabel = _locus_labels(lv)
@@ -703,6 +733,6 @@ def plot_locus_plotnine(
         + p9.labs(x=xlabel, y=ylabel, title=title if title is not None else f"{lv.chrom}:{lv.start}-{lv.end} ({lv.feature})")
         + p9.theme_minimal()
     )
-    if color_by == "end":
-        p = p + p9.scale_color_manual(values=_LOCUS_COLORS)
+    if color_by == "end" or (color_by == "motif_overlap" and palette is not None):
+        p = p + p9.scale_color_manual(values=colors)
     return p

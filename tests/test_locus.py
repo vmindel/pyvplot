@@ -152,3 +152,32 @@ def test_to_vplot_cpm_uses_the_whole_store_depth(store):
     assert v.n_fragments == store.n_fragments
     cpm = v.normalize("cpm")
     assert cpm.counts.sum() == pytest.approx(v.counts.sum() / (store.n_fragments / 1e6))
+
+
+def test_plot_palette_overrides_and_merges(store):
+    from matplotlib.colors import to_hex
+
+    lv = store.locus_vplot("chr1:1000-3000", motif="chr1:1980-2000", feature="cuts")
+    fig, ax = lv.plot(palette={"proximal": "#e66101"})
+    got = {c.get_label(): to_hex(c.get_facecolor()[0], keep_alpha=False) for c in ax.collections if c.get_label() in {"proximal", "distal"}}
+    assert got["proximal"] == "#e66101"
+    assert got["distal"] == "#762a83"  # untouched default
+
+    fig, ax = lv.plot(color_by="motif_overlap", palette={"none": "black"})
+    got = {c.get_label(): to_hex(c.get_facecolor()[0], keep_alpha=False) for c in ax.collections}
+    assert got["none"] == "#000000"
+    assert got["full"] == "#b2182b"  # untouched default
+
+    with pytest.raises(ValueError, match="valid levels"):
+        lv.plot(palette={"proximial": "red"})  # typo is caught, not silently ignored
+    with pytest.raises(ValueError, match="color_by=None"):
+        lv.plot(color_by=None, palette={"proximal": "red"})
+
+    pytest.importorskip("plotnine")
+    p = lv.plot_plotnine(palette={"distal": "#5e3c99"})
+    fig = p.draw()
+    drawn = {to_hex(c, keep_alpha=False) for coll in fig.axes[0].collections for c in coll.get_facecolors()}
+    assert "#5e3c99" in drawn and "#1b7837" in drawn  # override + default proximal
+    lv.plot_plotnine(color_by="motif_overlap", palette={"full": "#000000"}).draw()
+    with pytest.raises(ValueError, match="valid levels"):
+        lv.plot_plotnine(palette={"bogus": "red"})

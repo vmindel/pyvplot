@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added (merge provenance)
+- `FragmentStore.merge` keeps each input's metadata (including `ingest_stats` and `exclude_regions`) in `metadata["merged_inputs"]`, and with `dedup=True` records `metadata["removed_coord_dedup"]`.
+
+### Added (locus plot colours)
+- `LocusVPlot.plot(palette=)` / `plot_plotnine(palette=)`: a `{level: colour}` dict merged over the default colours for `color_by="end"` (midpoint/proximal/distal/left/right) or `"motif_overlap"` (full/partial/none). Unknown levels raise.
+
+### Added (ingestion progress)
+- `FragmentStore.from_bam(verbose=True)` prints progress to stderr (on each new chromosome and every 5M records) and a final summary of records read, skipped (SAM flags, pairing, MAPQ, chromosome, length), removed by coordinate dedup and blacklist, and kept. The same counts are always stored in `metadata["ingest_stats"]`.
+
 ### Added (blacklist)
 - `FragmentStore.exclude_regions(regions, mode=)` drops fragments overlapping (or with their midpoint in) a BED file or DataFrame of regions; `from_bam` / `from_fragments_bed` take `exclude_regions=` and `exclude_mode=`; `pyvplot-report` takes `--blacklist` and `--blacklist-mode`. The removal is recorded in `metadata["exclude_regions"]`.
 
