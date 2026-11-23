@@ -20,6 +20,8 @@ print(store.qc_summary())
 
 The BAM is read start to end, so any sort order works and no index is needed. Only properly paired reads are used.
 
+`from_bam(verbose=True)` prints progress to stderr as it reaches each chromosome and every 5M records, then a table of why records were dropped (SAM flags, pairing, MAPQ, chromosome, length, duplicates, blacklist). The same counts are always kept in `store.metadata["ingest_stats"]` and survive `save()`. With the default `pairing="read1"`, about half the records land under "pairing": those are the mate-2 records, one fragment is taken per read 1. `FragmentStore.merge` keeps each replicate's metadata, including `ingest_stats`, in `metadata["merged_inputs"]`.
+
 Other inputs:
 
 ```py
@@ -67,7 +69,7 @@ plot_insert_size_matplotlib(store, show_bands=True, max_len=500)   # shades the 
 
 ## 2. Anchors
 
-A BED file is enough: chromosome names must match the BAM's, the centre of each interval is used, and strand comes from column 6. Motif-scanner output with a strand column works directly. Name (column 4) becomes the row label in matrices and score tables.
+A BED file is enough: chromosome names must match the BAM's, the centre of each interval is used, and strand comes from column 6. Motif-scanner output with a strand column works directly. Name (column 4) becomes the row label in matrices and score tables; repeated names (every row `CTCF`) become `CTCF_0`, `CTCF_1`, ... in file order.
 
 ```py
 v = store.vplot("motifs.bed", flank=300, min_len=20, max_len=250, pos_bin=5, len_bin=5)

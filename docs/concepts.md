@@ -63,7 +63,7 @@ These bins are starting points, not calibrated values. Check them against your o
 
 Anchors are the positions you aggregate around: motif hits, TSSs, peak summits. Every analysis function accepts any of these:
 
-- a BED path: strand from column 6, and column 4 (name) becomes the row label;
+- a BED path: strand from column 6, and column 4 (name) becomes the row label (repeated names get `_0`, `_1`, ... suffixes);
 - a DataFrame with `chrom` plus `center` (or `pos`/`midpoint`/`summit`), or `chrom` plus `start` and `end`, and an optional `strand` column;
 - a dict of those columns.
 

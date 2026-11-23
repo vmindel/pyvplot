@@ -86,5 +86,6 @@ Returned DataFrame is indexed by `region_index` with columns:
 ## Footguns
 
 - **Sign conventions on `footprint_score`:** `protection_score` is positive when the motif center is protected (`flank > center`), while `footprint_depth` is negative when the motif center dips below the flanks. Check which sign your downstream sort or `BarTrack` expects.
+- **`footprint_score` pseudocount units:** `pseudocount` is in raw cuts per bp. With `normalize="cpm"`/`"rpkm"` it is converted to the matrix's units, so `protection_score` equals the raw-count score; it still depends on depth, because the pseudocount weighs more against sparse data.
 - **`coverage` units:** `feature="coverage"` computes exact **average base coverage per bin** (covered bp / `bin_size`). At `bin_size=1` this equals exact fragment pileup depth; at `bin_size=10` a fragment covering 5 bp of a bin contributes `0.5`.
 - **Feature default:** When `feature=None`, `vp.to_matrix` uses `store.assay.default_feature` (e.g., `"cuts"` for `chec`/`atac`/`cuttag`, `"midpoint"` for `mnase`/`cutrun`).
