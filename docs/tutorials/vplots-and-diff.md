@@ -115,7 +115,9 @@ distal      40    -1.0
 
 ```py
 fig, ax = lv.plot(color_by="end")          # points + shaded motif; color_by="motif_overlap" also works
+lv.plot(palette={"proximal": "#e66101"})   # override some level colours; unknown levels raise
 lv.to_vplot(pos_bin=5, len_bin=5).plot()   # the same points binned as a V-plot (n_anchors=1)
+lv.to_vplot(pos_bin=5, len_bin=5).normalize("expected", expected_from="genome")  # vs the store's length mix
 wt.locus_vplot("chr1:7170-7970").plot()    # no motif: midpoints, genomic x axis
 ```
 

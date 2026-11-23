@@ -21,7 +21,7 @@ Every extraction function accepts a `pandas.DataFrame`, `dict`, list of records,
 - **Center column:** `center`, `pos`, `midpoint`, or `summit`; alternatively `start` and `end` (uses exact midpoint `0.5 * (start + end)`).
 - **Motif interval:** `start`/`end` (or BED columns 2-3) are kept as the motif interval for `motif_overlap=` even when a center column is given; without them each anchor is `[center - 0.5, center + 0.5)`.
 - **Strand column (optional):** `strand`, `orientation`, or `dir`. `"-"` or `-1` triggers 5'->3' strand flipping; `"+"`, `"."`, `1`, or missing defaults to `+1`.
-- **Anchor IDs:** `DataFrame.index` is preserved as `region_index`; for BED input, column 4 (name) becomes the index.
+- **Anchor IDs:** `DataFrame.index` is preserved as `region_index`; for BED input, column 4 (name) becomes the index. Repeated BED names (every row `CTCF`) are made unique as `CTCF_0`, `CTCF_1`, ... in file order; a DataFrame index is used as given.
 - **Chromosome names must match the store.** Anchors on chromosomes the store lacks produce a `UserWarning` and all-zero rows.
 - Interpretation: fragments that *contain* a protected site put `cuts_plus` upstream and `cuts_minus` downstream of it; fragments that *abut* it do the reverse.
 

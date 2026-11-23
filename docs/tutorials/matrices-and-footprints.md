@@ -133,7 +133,7 @@ The same two arguments work on `to_matrix` (`feature="cuts_proximal"`) and on `v
 
 ## Per-anchor protection scores
 
-`footprint_score()` compares cut density in the centre `[-motif_half_width, +motif_half_width)` with the two shoulders of width `flank_width` on either side. `protection_score = log2((flank_density + pc) / (center_density + pc))` is positive when the centre is protected; `accessibility` is the mean density over centre and shoulders. Choose `motif_half_width` to cover the expected footprint, not just the motif. The score is per anchor, so with sparse data it is noisy: rank or group anchors with it rather than reading individual values.
+`footprint_score()` compares cut density in the centre `[-motif_half_width, +motif_half_width)` with the two shoulders of width `flank_width` on either side. `protection_score = log2((flank_density + pc) / (center_density + pc))` is positive when the centre is protected; `accessibility` is the mean density over centre and shoulders. `pc` is in raw cuts per bp; with `normalize="cpm"` it is converted, so the score is the same as on raw counts. Choose `motif_half_width` to cover the expected footprint, not just the motif. The score is per anchor, so with sparse data it is noisy: rank or group anchors with it rather than reading individual values.
 
 ```python
 scores = frags.footprint_score(anchors, motif_half_width=10, flank_width=25, feature="cuts")
