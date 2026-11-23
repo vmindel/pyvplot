@@ -212,6 +212,7 @@ def test_minus_motif_genomic_vs_relative_end_and_tie_consistency(store):
 
 def test_to_vplot_half_open_max_len_and_genome_expected(store):
     import pandas as pd
+
     import pyvplot as vp
 
     # Fragment with length 100 must be excluded by half-open [20, 100) in both to_vplot and store.vplot

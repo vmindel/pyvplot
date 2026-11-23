@@ -254,6 +254,7 @@ def test_kmer_counting_is_independent_of_chunk_size():
 
 def test_extract_anchor_sequences_and_correct_footprint():
     import pandas as pd
+
     import pyvplot as vp
 
     rng = np.random.default_rng(19)
@@ -296,6 +297,7 @@ def test_extract_anchor_sequences_and_correct_footprint():
 @pytest.mark.parametrize("strand", ["+", "-"])
 def test_extract_anchor_sequences_aligns_kmers_with_matrix_bins(width, strand):
     import pandas as pd
+
     import pyvplot as vp
 
     rng = np.random.default_rng(3)

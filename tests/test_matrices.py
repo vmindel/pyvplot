@@ -124,7 +124,6 @@ def test_signal_matrix_normalize_is_not_compounding():
 
 
 def test_footprint_score_pseudocount_is_scale_aware_and_bed_duplicates_are_unique(tmp_path):
-    import pyvplot as vp
 
     store, anchors = _make_protected_motif_store()
     sc_raw = store.footprint_score(anchors, motif_half_width=10, flank_width=25)
