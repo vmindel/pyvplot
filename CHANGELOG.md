@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed (bias sequence extraction)
+- `extract_anchor_sequences(..., orient=False)` cut `-` anchors with the `+` anchor window, so after `correct_matrix(strands=...)` their k-mers were shifted: by 1 bp at integer centres with even `k` or half-integer centres with odd `k`, and by `downstream - upstream` bp with asymmetric windows. `-` anchors now keep their own window and are only left un-reverse-complemented. The default `orient=True` and `correct_matrix(anchors=)` were not affected.
+
 ### Added (bias correction helpers)
 - `extract_anchor_sequences` extracts 5'->3' anchor-oriented DNA sequences (with edge-exact k-mer padding and `-` strand reverse-complementation) from a genome FASTA or `{chrom: seq}` dict. `KmerBiasTable.correct_matrix` accepts a genome FASTA/dict directly when `anchors=` is provided (it must be the table the matrix was built from, in the same order, or it raises), and `KmerBiasTable.correct_footprint` bias-corrects a `CutSiteFootprint` (strand-split or combined).
 
