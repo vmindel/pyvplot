@@ -293,27 +293,41 @@ def test_extract_anchor_sequences_and_correct_footprint():
     np.testing.assert_allclose(fp_unsplit_cor.combined, fp_unsplit_cor.matrix_combined.values.mean(axis=0))
 
 
+@pytest.mark.parametrize("orient", [True, False])
+@pytest.mark.parametrize(("up", "dn"), [(60, 60), (40, 80)])
+@pytest.mark.parametrize("k", [5, 6])
 @pytest.mark.parametrize("width", [20, 19])  # integer and half-integer anchor centre
 @pytest.mark.parametrize("strand", ["+", "-"])
-def test_extract_anchor_sequences_aligns_kmers_with_matrix_bins(width, strand):
+def test_extract_anchor_sequences_aligns_kmers_with_matrix_bins(width, strand, k, up, dn, orient):
+    # Each cut's expectation must be the weight the table gives that cut's own k-mer.
     import pandas as pd
 
     import pyvplot as vp
 
     rng = np.random.default_rng(3)
     g = "".join(rng.choice(list("ACGT"), 3000))
-    k, off = 4, 2
+    off = k // 2
     tab = KmerBiasTable(k=k, weights=rng.uniform(0.2, 5.0, 4**k), cut_offset=off)
     anchors = pd.DataFrame({"chrom": ["chr1"], "start": [1490], "end": [1490 + width], "strand": [strand]})
-    for s, e in [(1471, 1530), (1452, 1499), (1503, 1541)]:
+    seqs = vp.extract_anchor_sequences(anchors, {"chr1": g}, upstream=up, downstream=dn, k=k, orient=orient)
+    strands = None if orient else [strand]
+    checked = 0
+    for s, e in [(1471, 1530), (1452, 1499), (1503, 1541), (1460, 1525)]:
         store = FragmentStore({"chr1": np.array([s])}, {"chr1": np.array([e])}, assay="chec")
         for feat in ("cuts_plus", "cuts_minus"):
-            m = vp.to_matrix(store, anchors, upstream=60, downstream=60, bin_size=1, feature=feat)
-            (hit,) = np.flatnonzero(m.values[0])
-            cor = tab.correct_matrix(m, {"chr1": g}, anchors=anchors, pseudocount=0, preserve_scale=False)
+            m = vp.to_matrix(store, anchors, upstream=up, downstream=dn, bin_size=1, feature=feat)
+            hit = np.flatnonzero(m.values[0])
+            if len(hit) != 1:
+                continue
+            cor = tab.correct_matrix(m, seqs, strands=strands, pseudocount=0, preserve_scale=False)
             left = (feat == "cuts_plus") == (strand == "+")
             kmer = g[s - off : s - off + k] if left else reverse_complement(g[e - k + off : e + off])
-            assert 1.0 / cor.values[0, hit] == pytest.approx(tab.score_sequence(kmer)[off])
+            assert 1.0 / cor.values[0, hit[0]] == pytest.approx(tab.score_sequence(kmer)[off])
+            if orient:
+                via_genome = tab.correct_matrix(m, {"chr1": g}, anchors=anchors, pseudocount=0, preserve_scale=False)
+                np.testing.assert_allclose(via_genome.values, cor.values)
+            checked += 1
+    assert checked >= 6
 
 
 def test_correct_matrix_rejects_anchors_that_do_not_match_rows():

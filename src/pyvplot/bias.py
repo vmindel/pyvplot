@@ -216,7 +216,16 @@ def extract_anchor_sequences(
         Cut offset within the k-mer (default ``k // 2`` when ``k`` is provided).
     orient:
         If ``True`` (default), reverse-complement ``-`` strand anchors so the
-        returned strings are already in 5'->3' anchor orientation.
+        returned strings are already in 5'->3' anchor orientation. If ``False``,
+        ``-`` anchors cover the same genomic window but are returned as the
+        genomic ``+`` strand; pass ``strands=`` to ``correct_matrix`` to orient them.
+
+    Notes
+    -----
+    For paired-end data, right-end (reverse-frame) cuts need one more base of left
+    padding than ``cut_offset`` provides when ``k`` is odd, so with odd ``k`` the
+    first bin of a ``cuts_minus`` (or the right-end half of a ``cuts``) expectation
+    keeps the neutral weight ``1.0``.
     """
     up = int(flank if upstream is None else upstream)
     dn = int(flank if downstream is None else downstream)
@@ -239,7 +248,7 @@ def extract_anchor_sequences(
     for i in range(norm.n_anchors):
         chrom = str(norm.chroms[i])
         c = float(norm.centers[i])
-        if int(norm.strands[i]) >= 0 or not orient:
+        if int(norm.strands[i]) >= 0:
             # extract_events puts the cut at boundary b in bin floor(b - c + up), so bin 0 is
             # boundary ceil(c - up). Centres are half-integers for odd-width motifs, where
             # floor(c) - up would shift every k-mer by one base.
@@ -247,9 +256,12 @@ def extract_anchor_sequences(
             sub = _fetch_subseq(genome, chrom_cache, chrom, g_start, g_start + width)
         else:
             # '-' anchors: bin floor(c - b + up), so bin 0 is boundary floor(c + up), and the
-            # window is read reverse-complemented.
+            # window is read reverse-complemented. orient=False keeps this '-' window and leaves
+            # the reverse complement to correct_matrix(strands=...).
             g_end = int(np.floor(c + up)) + pad_l
-            sub = reverse_complement(_fetch_subseq(genome, chrom_cache, chrom, g_end - width, g_end))
+            sub = _fetch_subseq(genome, chrom_cache, chrom, g_end - width, g_end)
+            if orient:
+                sub = reverse_complement(sub)
         out.append(sub)
     return out
 
