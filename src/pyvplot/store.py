@@ -139,6 +139,7 @@ class _BamProgress:
         self.ref_names = ref_names
         self.every = int(every)
         self.tid = -2
+        self.seen: set[int] = set()
         self.next_at = self.every
 
     def elapsed(self) -> float:
@@ -150,10 +151,16 @@ class _BamProgress:
         print(f"[pyvplot.from_bam {self.elapsed():7.1f}s] {msg}", file=sys.stderr, flush=True)
 
     def update(self, n_seen: int, tid: int, n_kept: int) -> None:
-        if n_seen >= self.next_at:
+        # Name-sorted / unsorted BAMs switch chromosome on almost every record, so a
+        # chromosome is announced only the first time it is seen.
+        due = n_seen >= self.next_at
+        if due:
             self.next_at = (n_seen // self.every + 1) * self.every
-        new_chrom = tid != self.tid
         self.tid = tid
+        new_chrom = tid not in self.seen
+        if not (due or new_chrom):
+            return
+        self.seen.add(tid)
         chrom = self.ref_names[tid] if 0 <= tid < len(self.ref_names) else "*unmapped*"
         t = self.elapsed()
         rate = n_seen / t if t > 0 else 0.0
@@ -753,7 +760,10 @@ class FragmentStore:
         ``[min_len, max_len]`` or a negative start after shifting),
         ``unpaired_mates`` (``pairing="mate"`` only), ``fragments_parsed``,
         ``removed_coord_dedup``, ``removed_blacklist``, ``fragments_kept``,
-        ``seconds``. Flag order matters: a read failing several filters is counted
+        ``seconds``. With ``pairing="mate"``, ``skipped_length`` and ``fragments_parsed``
+        count pairs and the first-seen mate of each pair is not counted under any key, so
+        the ``skipped_*`` keys plus ``fragments_parsed`` fall short of ``records_read``.
+        Flag order matters: a read failing several filters is counted
         under the first one checked (flag, pairing, MAPQ, chromosome, length).
         """
         try:

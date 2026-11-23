@@ -435,3 +435,29 @@ def test_merge_keeps_input_metadata(tmp_path: Path):
     back = FragmentStore.load(tmp_path / "m.frags.npz")
     assert back.metadata["merged_inputs"][1]["ingest_stats"]["removed_blacklist"] == 1
     assert "removed_coord_dedup" not in FragmentStore.merge([a, b]).metadata
+
+
+def test_from_bam_verbose_name_sorted_does_not_log_every_switch(tmp_path: Path, capsys):
+    pysam = pytest.importorskip("pysam")
+    header = {"HD": {"VN": "1.6", "SO": "queryname"}, "SQ": [{"SN": c, "LN": 100_000} for c in ("chr1", "chr2")]}
+    bam_path = tmp_path / "interleaved.bam"
+    with pysam.AlignmentFile(str(bam_path), "wb", header=header) as out:
+        for i in range(200):
+            tid, s = i % 2, 1000 + 10 * i  # chromosome alternates every pair
+            for r1 in (True, False):
+                a = pysam.AlignedSegment()
+                a.query_name = f"q{i:04d}"
+                a.reference_id = a.next_reference_id = tid
+                a.reference_start, a.next_reference_start = (s, s + 100) if r1 else (s + 100, s)
+                a.cigarstring = "50M"
+                a.query_sequence = "A" * 50
+                a.query_qualities = pysam.qualitystring_to_array("I" * 50)
+                a.mapping_quality = 40
+                a.template_length = 150 if r1 else -150
+                a.flag = 0x1 | 0x2 | (0x40 | 0x20 if r1 else 0x80 | 0x10)
+                out.write(a)
+    store = FragmentStore.from_bam(bam_path, assay="chec", verbose=True)
+    err = capsys.readouterr().err
+    assert store.n_fragments == 200
+    assert err.count("now on chr1") == 1 and err.count("now on chr2") == 1
+    assert err.count("[pyvplot.from_bam") <= 6  # header, 2 chromosomes, finished, done
