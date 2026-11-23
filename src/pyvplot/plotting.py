@@ -612,6 +612,8 @@ _LOCUS_COLORS = {
     "distal": "#762a83",
     "left": "#d73027",
     "right": "#4575b4",
+    "upstream": "#d73027",
+    "downstream": "#4575b4",
 }
 _LOCUS_OVERLAP_COLORS = {"full": "#b2182b", "partial": "#ef8a62", "none": "#999999"}
 
@@ -658,7 +660,8 @@ def plot_locus_matplotlib(
     ``color_by`` is ``"end"`` (proximal/distal, left/right or midpoint), ``"motif_overlap"``
     or ``None`` for a single colour. ``palette`` maps levels to colours and is merged over
     the defaults, so ``{"proximal": "#e66101"}`` changes one level only. Levels for
-    ``"end"``: ``midpoint``, ``proximal``, ``distal``, ``left``, ``right``; for
+    ``"end"``: ``midpoint``, ``proximal``, ``distal``, ``left``, ``right``, ``upstream``,
+    ``downstream``; for
     ``"motif_overlap"``: ``full``, ``partial``, ``none``. Returns ``(fig, ax)``.
     """
     plt = _require_matplotlib()

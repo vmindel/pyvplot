@@ -43,7 +43,7 @@ print(f"Learned bias at GATC: {bias['GATC']:.2f}x (mean across 4-mers: {bias.wei
 Learned bias at GATC: 54.87x (mean across 4-mers: 1.00x)
 ```
 
-`correct_matrix` needs one sequence per anchor, oriented 5'→3' along the anchor (reverse-complemented for `-` anchors, or pass `strands=`). Each sequence must be either exactly `n_bins` long, or padded by `cut_offset` bases on the left and `k - 1 - cut_offset` on the right so edge cuts get a full k-mer. You extract these from the genome yourself; pyvplot does not yet do it for you. The expectation follows the matrix's `feature`: left-end cuts (`cuts_plus`) are scored on the forward strand, right-end cuts (`cuts_minus`) on the reverse strand, and a combined `cuts` matrix with the mean of the two. This toy example checks that correcting a left-end profile equal to its own expectation flattens it:
+`correct_matrix` and `correct_footprint` either take pre-extracted 5'→3' sequences per anchor (length `n_bins`, or padded by `cut_offset` bases on the left and `k - 1 - cut_offset` on the right so edge cuts get a full k-mer) **or** extract them directly from a genome FASTA / `{chrom: seq}` dict when you pass `anchors=` (or call `vp.extract_anchor_sequences(anchors, "genome.fa", flank=..., k=bias.k)`). The expectation follows the matrix's `feature`: left-end cuts (`cuts_plus`) are scored on the forward strand, right-end cuts (`cuts_minus`) on the reverse strand, and a combined `cuts` matrix with the mean of the two. This toy example checks that correcting a left-end profile equal to its own expectation flattens it:
 
 ```python
 anchor_seq = "AAAAAAAA" + "GATC" + "AAAAAAAA"

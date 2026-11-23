@@ -181,3 +181,81 @@ def test_plot_palette_overrides_and_merges(store):
     lv.plot_plotnine(color_by="motif_overlap", palette={"full": "#000000"}).draw()
     with pytest.raises(ValueError, match="valid levels"):
         lv.plot_plotnine(palette={"bogus": "red"})
+
+
+def test_minus_motif_genomic_vs_relative_end_and_tie_consistency(store):
+    import pyvplot as vp
+
+    # Fragment [985, 1030) around '-' motif [995, 1005) (center 1000):
+    # In '-' motif 5'->3' orientation: 1030 is upstream (cuts_plus), 985 is downstream (cuts_minus).
+    # 985 is 15 bp from center (proximal); 1030 is 30 bp from center (distal).
+    st = vp.FragmentStore.from_arrays({"chr1": np.array([985])}, {"chr1": np.array([1030])})
+    for feat, expected_pos in (
+        ("cuts_plus", [1030.0]),
+        ("cuts_minus", [985.0]),
+        ("cuts_proximal", [985.0]),
+        ("cuts_distal", [1030.0]),
+    ):
+        lv_rel = st.locus_vplot("chr1:950-1050", motif="chr1:995-1005:-", feature=feat, coords="relative")
+        lv_gen = st.locus_vplot("chr1:950-1050", motif="chr1:995-1005:-", feature=feat, coords="genomic")
+        np.testing.assert_allclose(lv_rel.points["pos"], expected_pos)
+        np.testing.assert_allclose(lv_gen.points["pos"], expected_pos)
+        np.testing.assert_allclose(lv_gen.points["x"], expected_pos)
+
+    # Tie-breaker on '-' motif: fragment [980, 1020) centered at 1000 -> upstream end (1020) is proximal
+    st_tie = vp.FragmentStore.from_arrays({"chr1": np.array([980])}, {"chr1": np.array([1020])})
+    rel_cuts = st_tie.locus_vplot("chr1:950-1050", motif="chr1:995-1005:-", feature="cuts", coords="relative")
+    gen_cuts = st_tie.locus_vplot("chr1:950-1050", motif="chr1:995-1005:-", feature="cuts", coords="genomic")
+    assert rel_cuts.points.loc[rel_cuts.points["end"] == "proximal", "pos"].iloc[0] == 1020.0
+    assert gen_cuts.points.loc[gen_cuts.points["end"] == "proximal", "pos"].iloc[0] == 1020.0
+
+
+def test_to_vplot_half_open_max_len_and_genome_expected(store):
+    import pandas as pd
+
+    import pyvplot as vp
+
+    # Fragment with length 100 must be excluded by half-open [20, 100) in both to_vplot and store.vplot
+    st = vp.FragmentStore.from_arrays({"chr1": np.array([950, 960])}, {"chr1": np.array([1050, 1010])})
+    lv = st.locus_vplot("chr1:900-1100", motif="chr1:995-1005:+", feature="midpoint")
+    v_loc = lv.to_vplot(pos_bin=10, len_bin=10, min_len=20, max_len=100)
+    v_agg = st.vplot(pd.DataFrame({"chrom": ["chr1"], "center": [1000.0]}), flank=100, pos_bin=10, len_bin=10, min_len=20, max_len=100)
+    np.testing.assert_array_equal(v_loc.counts, v_agg.counts)
+    assert v_loc.counts.sum() == 1.0
+
+    # expected_from='genome' works on VPlot produced by to_vplot()
+    lv_full = store.locus_vplot("chr1:1000-3000", len_range=(20, 250))
+    v_full = lv_full.to_vplot(pos_bin=50, len_bin=10, min_len=20, max_len=250)
+    v_exp = v_full.normalize("expected", expected_from="genome")
+    assert v_exp.normalization == "expected:genome"
+    assert np.isfinite(v_exp.counts).all()
+
+
+def test_to_vplot_cuts_at_max_len_when_range_is_not_a_multiple_of_len_bin():
+    import pyvplot as vp
+
+    # Lengths 95 and 104: max_len=100 with len_bin=30 has a last edge at 110, but 104 is out
+    # of [min_len, max_len), in the locus counts and in genome_len_counts alike.
+    st = vp.FragmentStore.from_arrays({"chr1": np.array([950, 950])}, {"chr1": np.array([1045, 1054])})
+    lv = st.locus_vplot("chr1:900-1100", motif="chr1:995-1005:+", feature="midpoint")
+    v = lv.to_vplot(pos_bin=10, len_bin=30, min_len=20, max_len=100)
+    assert v.counts.sum() == 1.0
+    np.testing.assert_array_equal(v.genome_len_counts, [0.0, 0.0, 1.0])
+
+
+def test_motif_cut_ends_are_labelled_upstream_downstream():
+    from matplotlib.colors import to_hex
+
+    import pyvplot as vp
+
+    # '-' motif [995, 1005): upstream is the genomic right, so fragment [985, 1030)'s upstream end is 1030.
+    st = vp.FragmentStore.from_arrays({"chr1": np.array([985])}, {"chr1": np.array([1030])})
+    for coords in ("genomic", "relative"):
+        up = st.locus_vplot("chr1:950-1050", motif="chr1:995-1005:-", feature="cuts_plus", coords=coords)
+        dn = st.locus_vplot("chr1:950-1050", motif="chr1:995-1005:-", feature="cuts_minus", coords=coords)
+        assert up.points["end"].tolist() == ["upstream"] and up.points["pos"].tolist() == [1030.0]
+        assert dn.points["end"].tolist() == ["downstream"] and dn.points["pos"].tolist() == [985.0]
+    fig, ax = up.plot(palette={"upstream": "#000000"})
+    assert {c.get_label(): to_hex(c.get_facecolor()[0], keep_alpha=False) for c in ax.collections}["upstream"] == "#000000"
+    # without a motif the ends are still genomic left/right
+    assert st.locus_vplot("chr1:950-1050", feature="cuts_plus").points["end"].tolist() == ["left"]

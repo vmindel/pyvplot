@@ -250,3 +250,81 @@ def test_kmer_counting_is_independent_of_chunk_size():
     # k-mers touching N are skipped, and out-of-range starts are ignored
     assert ref_bg.sum() < len(seq) - 2
     assert ref_obs.sum() <= ((k_starts >= 0) & (k_starts < len(seq) - 2)).sum()
+
+
+def test_extract_anchor_sequences_and_correct_footprint():
+    import pandas as pd
+
+    import pyvplot as vp
+
+    rng = np.random.default_rng(19)
+    genome = {"chr1": "".join(rng.choice(list("ACGT"), 2_000))}
+    anchors = pd.DataFrame(
+        {"chrom": ["chr1", "chr1"], "center": [500, 1200], "strand": ["+", "-"]},
+        index=["site_plus", "site_minus"],
+    )
+    bias = KmerBiasTable.from_dict({"GATC": 4.0, "ACGT": 2.5}, cut_offset=2)
+
+    seqs = vp.extract_anchor_sequences(anchors, genome, flank=30, k=bias.k, cut_offset=bias.cut_offset)
+    assert len(seqs) == 2 and all(len(s) == 60 + bias.k - 1 for s in seqs)
+    # '+' anchor matches direct slice [500 - 30 - 2 : 500 + 30 + 1]
+    assert seqs[0] == genome["chr1"][500 - 32 : 500 + 31]
+    # '-' anchor matches reverse complement of [1200 - 30 - 1 : 1200 + 30 + 2]
+    assert seqs[1] == reverse_complement(genome["chr1"][1200 - 31 : 1200 + 32])
+
+    # Build a synthetic store and verify correct_matrix(..., anchors=anchors) matches explicit sequences
+    starts = rng.integers(400, 1300, size=300, dtype=np.int32)
+    store = FragmentStore({"chr1": starts}, {"chr1": starts + rng.integers(30, 100, size=300, dtype=np.int32)}, assay="chec")
+    mat = store.to_matrix(anchors, flank=30, bin_size=1, feature="cuts")
+    c_explicit = bias.correct_matrix(mat, seqs)
+    c_auto = bias.correct_matrix(mat, genome, anchors=anchors)
+    np.testing.assert_allclose(c_auto.values, c_explicit.values)
+
+    # Verify correct_footprint works on strand-split and unsplit CutSiteFootprints
+    fp = store.cut_site_footprint(anchors, flank=30, bin_size=1)
+    fp_cor = bias.correct_footprint(fp, genome, anchors=anchors)
+    assert fp_cor.plus is not None and fp_cor.minus is not None
+    np.testing.assert_allclose(fp_cor.plus + fp_cor.minus, fp_cor.combined)
+    assert fp_cor.matrix_plus is not None and fp_cor.matrix_plus.normalization.endswith("+kmer_bias")
+
+    fp_unsplit = store.cut_site_footprint(anchors, flank=30, bin_size=1, split_strands=False)
+    fp_unsplit_cor = bias.correct_footprint(fp_unsplit, seqs)
+    assert fp_unsplit_cor.plus is None
+    np.testing.assert_allclose(fp_unsplit_cor.combined, fp_unsplit_cor.matrix_combined.values.mean(axis=0))
+
+
+@pytest.mark.parametrize("width", [20, 19])  # integer and half-integer anchor centre
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_extract_anchor_sequences_aligns_kmers_with_matrix_bins(width, strand):
+    import pandas as pd
+
+    import pyvplot as vp
+
+    rng = np.random.default_rng(3)
+    g = "".join(rng.choice(list("ACGT"), 3000))
+    k, off = 4, 2
+    tab = KmerBiasTable(k=k, weights=rng.uniform(0.2, 5.0, 4**k), cut_offset=off)
+    anchors = pd.DataFrame({"chrom": ["chr1"], "start": [1490], "end": [1490 + width], "strand": [strand]})
+    for s, e in [(1471, 1530), (1452, 1499), (1503, 1541)]:
+        store = FragmentStore({"chr1": np.array([s])}, {"chr1": np.array([e])}, assay="chec")
+        for feat in ("cuts_plus", "cuts_minus"):
+            m = vp.to_matrix(store, anchors, upstream=60, downstream=60, bin_size=1, feature=feat)
+            (hit,) = np.flatnonzero(m.values[0])
+            cor = tab.correct_matrix(m, {"chr1": g}, anchors=anchors, pseudocount=0, preserve_scale=False)
+            left = (feat == "cuts_plus") == (strand == "+")
+            kmer = g[s - off : s - off + k] if left else reverse_complement(g[e - k + off : e + off])
+            assert 1.0 / cor.values[0, hit] == pytest.approx(tab.score_sequence(kmer)[off])
+
+
+def test_correct_matrix_rejects_anchors_that_do_not_match_rows():
+    import pandas as pd
+
+    g = {"chr1": "ACGT" * 500}
+    anchors = pd.DataFrame({"chrom": ["chr1", "chr1"], "center": [500, 1200], "strand": ["+", "-"]}, index=["a", "b"])
+    store = FragmentStore({"chr1": np.array([480, 1190])}, {"chr1": np.array([540, 1260])}, assay="chec")
+    mat = store.to_matrix(anchors, flank=30, bin_size=1, feature="cuts")
+    tab = KmerBiasTable.from_dict({"GATC": 4.0}, cut_offset=2)
+    with pytest.raises(ValueError, match="same order"):
+        tab.correct_matrix(mat, g, anchors=anchors.iloc[::-1])
+    with pytest.raises(ValueError, match="same order"):
+        tab.correct_footprint(store.cut_site_footprint(anchors, flank=30), g, anchors=anchors.iloc[:1])

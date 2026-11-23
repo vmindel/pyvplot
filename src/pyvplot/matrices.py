@@ -636,7 +636,9 @@ def footprint_score(
     - ``center_density``: per-bp density in motif center
     - ``flank_density``: per-bp density in flanking shoulders
     - ``protection_score``: ``log2((flank_density + pseudocount) / (center_density + pseudocount))``
-      (positive values indicate stronger protection at the motif center)
+      (positive values indicate stronger protection at the motif center). ``pseudocount`` is
+      in raw cuts per bp; with ``normalize=`` it is converted to the matrix's units, so the
+      score equals the raw-count one.
     - ``footprint_depth``: ``center_density - flank_density`` (negative dip = deeper footprint)
     - ``accessibility``: total per-bp density across center + flanks
     """
@@ -671,7 +673,9 @@ def footprint_score(
     center_density = center_cuts / center_bp
     flank_density = flank_cuts / flank_bp
 
-    protection = np.log2((flank_density + pseudocount) / (center_density + pseudocount))
+    scale = mat.raw_count_scale() if normalize is not None else 1.0
+    pc = float(pseudocount) * (scale if scale is not None else 1.0)
+    protection = np.log2((flank_density + pc) / (center_density + pc))
     depth = center_density - flank_density
     accessibility = (center_cuts + flank_cuts) / (center_bp + flank_bp)
 

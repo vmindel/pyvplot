@@ -53,8 +53,10 @@ class LocusVPlot:
     ----------
     points:
         One row per plotted point: ``x`` (plot coordinate), ``pos`` (genomic
-        coordinate, 0-based), ``frag_len``, ``end`` (``"midpoint"``, ``"left"`` /
-        ``"right"``, or with a motif ``"proximal"`` / ``"distal"``) and ``motif_overlap``
+        coordinate, 0-based), ``frag_len``, ``end`` (``"midpoint"``; ``"left"`` /
+        ``"right"`` without a motif; with a motif ``"proximal"`` / ``"distal"`` for
+        ``cuts`` and ``"upstream"`` / ``"downstream"`` for ``cuts_plus`` / ``cuts_minus``,
+        in the motif's 5'->3' orientation) and ``motif_overlap``
         (``"full"``, ``"partial"`` or ``"none"``, per fragment; missing without a motif).
     chrom, start, end:
         The locus, 0-based half-open.
@@ -84,6 +86,10 @@ class LocusVPlot:
     motif_overlap: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     store_n_fragments: int = 0
+    # 1-bp histogram of every fragment length in the source store (index = length), for
+    # to_vplot()'s genome_len_counts. A histogram, not the lengths: a few kB instead of 4 bytes
+    # per fragment held by every LocusVPlot.
+    _genome_len_hist: np.ndarray | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         mt = "" if self.motif is None else f", motif={self.motif[0]}-{self.motif[1]}({self.motif_strand})"
@@ -127,16 +133,35 @@ class LocusVPlot:
         """
         from pyvplot.vplot import VPlot
 
+        if pos_bin <= 0 or len_bin <= 0:
+            raise ValueError("`pos_bin` and `len_bin` must be positive integers.")
         lens = self.points["frag_len"].to_numpy(dtype=np.float64)
-        lo = int(np.floor(lens.min() / len_bin) * len_bin) if min_len is None and len(lens) else (min_len or 0)
-        hi = int(np.ceil((lens.max() + 1) / len_bin) * len_bin) if max_len is None and len(lens) else (max_len or lo + len_bin)
-        hi = max(hi, lo + len_bin)
+        lo = int(np.floor(lens.min() / len_bin) * len_bin) if min_len is None and len(lens) else (0 if min_len is None else int(min_len))
+        hi = int(np.ceil((lens.max() + 1) / len_bin) * len_bin) if max_len is None and len(lens) else (lo + len_bin if max_len is None else int(max_len))
+        if hi <= lo:
+            raise ValueError(f"max_len ({hi}) must be greater than min_len ({lo}).")
         n_len = int(np.ceil((hi - lo) / len_bin))
         x0, x1 = self.xlim
         n_pos = max(1, int(np.ceil((x1 - x0) / pos_bin)))
         pos_edges = x0 + pos_bin * np.arange(n_pos + 1, dtype=np.float64)
         len_edges = lo + len_bin * np.arange(n_len + 1, dtype=np.float64)
-        counts, _, _ = np.histogram2d(lens, self.points["x"].to_numpy(dtype=np.float64), bins=[len_edges, pos_edges])
+        # Strict half-open binning [lo, hi) x [x0, x1) matching accumulate_vplot
+        counts = np.zeros((n_len, n_pos), dtype=np.float64)
+        if len(lens) > 0:
+            xs = self.points["x"].to_numpy(dtype=np.float64)
+            li = np.floor((lens - lo) / len_bin).astype(np.int64)
+            pi = np.floor((xs - x0) / pos_bin).astype(np.int64)
+            ok = (lens >= lo) & (lens < hi) & (li >= 0) & (li < n_len) & (xs >= x0) & (xs < pos_edges[-1]) & (pi >= 0) & (pi < n_pos)
+            if np.any(ok):
+                np.add.at(counts, (li[ok], pi[ok]), 1.0)
+
+        genome_len_counts: np.ndarray | None = None
+        if self._genome_len_hist is not None:
+            # Same [lo, hi) cut as the locus counts and store.vplot; the last bin may be short.
+            cum = np.concatenate([[0], np.cumsum(self._genome_len_hist)])
+            e = np.clip(np.minimum(lo + len_bin * np.arange(n_len + 1), hi), 0, len(cum) - 1)
+            genome_len_counts = (cum[e[1:]] - cum[e[:-1]]).astype(np.float64)
+
         return VPlot(
             counts=counts,
             pos_edges=pos_edges,
@@ -145,6 +170,7 @@ class LocusVPlot:
             n_fragments=self.store_n_fragments or self.n_fragments,
             assay=self.assay,
             feature=self.feature,
+            genome_len_counts=genome_len_counts,
             motif_overlap=self.motif_overlap,
             metadata={"locus": f"{self.chrom}:{self.start}-{self.end}", "coords": self.coords},
         )
@@ -245,10 +271,11 @@ def locus_vplot(
         raise ValueError(f"coords must be 'genomic' or 'relative', got {coords!r}.")
 
     c = 0.5 * (m_lo + m_hi) if has_motif else 0.5 * (L + R)
-    flip = coords == "relative" and orient and m_strand == "-"
-    up, dn = (R - c, c - L) if flip else (c - L, R - c)
+    is_minus = has_motif and orient and m_strand == "-"
+    flip_x = coords == "relative" and is_minus
+    up, dn = (R - c, c - L) if is_minus else (c - L, R - c)
     anchor = pd.DataFrame(
-        {"chrom": [chrom], "center": [c], "start": [m_lo], "end": [m_hi], "strand": ["-" if flip else "+"]}
+        {"chrom": [chrom], "center": [c], "start": [m_lo], "end": [m_hi], "strand": ["-" if is_minus else "+"]}
     )
     ev = extract_events(
         store, anchor, upstream=up, downstream=dn, len_range=len_range,
@@ -263,21 +290,25 @@ def locus_vplot(
             "midpoint": [("rel_mid", "midpoint")],
             "cuts": [("rel_proximal", "proximal"), ("rel_distal", "distal")] if has_motif
             else [("rel_left", "left"), ("rel_right", "right")],
-            "cuts_plus": [("rel_left", "left")],
-            "cuts_minus": [("rel_right", "right")],
+            # With a motif these ends follow its 5'->3' orientation, so on a '-' motif the
+            # upstream end is the fragment's genomic right end: "left"/"right" would mislead.
+            "cuts_plus": [("rel_left", "upstream" if has_motif else "left")],
+            "cuts_minus": [("rel_right", "downstream" if has_motif else "right")],
             "cuts_proximal": [("rel_proximal", "proximal")],
             "cuts_distal": [("rel_distal", "distal")],
         }[feature]
         parts = []
         for col, label in cols:
             rel = ev[col].to_numpy(dtype=np.float64)
-            keep = (rel >= rel_lo) & (rel < rel_hi)
+            pos = (c - rel) if is_minus else (c + rel)
+            keep = (pos >= L) & (pos < R)
             rel = rel[keep]
+            pos = pos[keep]
             parts.append(
                 pd.DataFrame(
                     {
-                        "x": rel if coords == "relative" else c + rel,
-                        "pos": c - rel if flip else c + rel,
+                        "x": (-rel if (is_minus and not flip_x) else rel) if coords == "relative" else pos,
+                        "pos": pos,
                         "frag_len": ev["frag_len"].to_numpy()[keep],
                         "end": label,
                         "motif_overlap": ev["motif_overlap"].to_numpy()[keep],
@@ -306,4 +337,5 @@ def locus_vplot(
         assay=store.assay.name,
         motif_overlap=motif_overlap,
         store_n_fragments=store.n_fragments,
+        _genome_len_hist=np.bincount(store.lengths()) if store.n_fragments else np.zeros(0, dtype=np.int64),
     )

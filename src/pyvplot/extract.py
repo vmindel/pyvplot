@@ -198,6 +198,10 @@ def _read_anchors_bed(path: Path) -> pd.DataFrame:
             records.append((chrom, start, end, center, strand, name))
     df = pd.DataFrame(records, columns=["chrom", "start", "end", "center", "strand", "name"])
     if len(df) > 0:
+        if df["name"].duplicated().any():
+            counts = df.groupby("name", sort=False).cumcount()
+            dup_mask = df["name"].duplicated(keep=False)
+            df["name"] = np.where(dup_mask, df["name"] + "_" + counts.astype(str), df["name"])
         df = df.set_index("name")
     return df
 
