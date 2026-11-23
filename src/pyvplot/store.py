@@ -116,6 +116,54 @@ def _in_regions(
     return (k >= 0) & (reg_ends[np.maximum(k, 0)] > fs)
 
 
+_PROGRESS_EVERY = 5_000_000
+
+
+def _fmt_count(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1e6:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1e3:.1f}k"
+    return str(n)
+
+
+class _BamProgress:
+    """Progress lines for ``from_bam(verbose=True)``: on each new chromosome and every N records."""
+
+    def __init__(self, path: str, ref_names: tuple[str, ...], every: int = _PROGRESS_EVERY) -> None:
+        import time
+
+        self._time = time.perf_counter
+        self.t0 = self._time()
+        self.path = path
+        self.ref_names = ref_names
+        self.every = int(every)
+        self.tid = -2
+        self.next_at = self.every
+
+    def elapsed(self) -> float:
+        return self._time() - self.t0
+
+    def log(self, msg: str) -> None:
+        import sys
+
+        print(f"[pyvplot.from_bam {self.elapsed():7.1f}s] {msg}", file=sys.stderr, flush=True)
+
+    def update(self, n_seen: int, tid: int, n_kept: int) -> None:
+        if n_seen >= self.next_at:
+            self.next_at = (n_seen // self.every + 1) * self.every
+        new_chrom = tid != self.tid
+        self.tid = tid
+        chrom = self.ref_names[tid] if 0 <= tid < len(self.ref_names) else "*unmapped*"
+        t = self.elapsed()
+        rate = n_seen / t if t > 0 else 0.0
+        prefix = "now on" if new_chrom else "on"
+        self.log(
+            f"{prefix} {chrom}: {_fmt_count(n_seen)} records read, "
+            f"{_fmt_count(n_kept)} fragments kept ({_fmt_count(int(rate))} records/s)"
+        )
+
+
 class _ChromBuffers:
     """Compact per-chromosome accumulators (4 bytes per coordinate instead of ~36 for a list of ints)."""
 
@@ -643,6 +691,7 @@ class FragmentStore:
         threads: int = 1,
         exclude_regions: Any = None,
         exclude_mode: str = "overlap",
+        verbose: bool = False,
     ) -> FragmentStore:
         """Ingest fragments from a BAM/CRAM file via ``pysam``.
 
@@ -688,6 +737,24 @@ class FragmentStore:
             [`exclude_regions`][pyvplot.FragmentStore.exclude_regions].
         exclude_mode:
             ``"overlap"`` (default) or ``"midpoint"``; how a fragment is matched to a region.
+        verbose:
+            Print progress to stderr (on each new chromosome and every 5M BAM records)
+            and a final summary of records read and why they were dropped. The same
+            counts are always stored in ``metadata["ingest_stats"]``, verbose or not.
+
+        Notes
+        -----
+        ``metadata["ingest_stats"]`` counts BAM *records*, not fragments. With
+        ``pairing="read1"`` every mate-2 record is skipped by design (one fragment per
+        R1), so ``skipped_pairing`` is about half of ``records_read`` on a clean
+        paired-end BAM. Keys: ``records_read``, ``skipped_flag``, ``skipped_pairing``
+        (not a proper pair / mate 2 / mate on another chromosome / zero TLEN),
+        ``skipped_mapq``, ``skipped_chrom``, ``skipped_length`` (outside
+        ``[min_len, max_len]`` or a negative start after shifting),
+        ``unpaired_mates`` (``pairing="mate"`` only), ``fragments_parsed``,
+        ``removed_coord_dedup``, ``removed_blacklist``, ``fragments_kept``,
+        ``seconds``. Flag order matters: a read failing several filters is counted
+        under the first one checked (flag, pairing, MAPQ, chromosome, length).
         """
         try:
             import pysam
@@ -728,6 +795,11 @@ class FragmentStore:
 
         buf = _ChromBuffers(stranded=not cfg.paired_end)
 
+        n_seen = 0
+        n_flag = n_pair = n_mapq = n_chrom = n_len = n_kept = 0
+        n_unpaired = 0
+        progress: _BamProgress | None = None
+
         path_str = str(bam_path)
         with pysam.AlignmentFile(path_str, "rb", threads=max(1, int(threads))) as bam:
             ref_names = bam.references
@@ -739,19 +811,35 @@ class FragmentStore:
                     continue
                 allowed_tids.add(tid)
 
+            if verbose:
+                progress = _BamProgress(path_str, tuple(ref_names))
+                progress.log(
+                    f"reading {path_str} (assay={cfg.name}, pairing="
+                    f"{pairing if cfg.paired_end else 'single-end'}, min_mapq={min_mapq}, "
+                    f"length {min_len}-{max_len}, {len(allowed_tids)}/{len(ref_names)} "
+                    "chromosomes allowed)"
+                )
+
             if not cfg.paired_end:
                 # Single-end / ChIP-exo: record stranded 5' cleavage sites as [pos, pos + 1)
                 for read in bam.fetch(until_eof=True):
+                    n_seen += 1
+                    tid = read.reference_id
+                    if progress is not None and (tid != progress.tid or n_seen >= progress.next_at):
+                        progress.update(n_seen, tid, n_kept)
                     if read.flag & excl:
+                        n_flag += 1
                         continue
                     if read.mapping_quality < min_mapq:
+                        n_mapq += 1
                         continue
-                    tid = read.reference_id
                     if tid not in allowed_tids:
+                        n_chrom += 1
                         continue
                     if read.is_reverse:
                         ref_end = read.reference_end
                         if ref_end is None:
+                            n_len += 1
                             continue
                         pos = ref_end - 1 + right_shift
                         st = -1
@@ -759,22 +847,35 @@ class FragmentStore:
                         pos = read.reference_start + left_shift
                         st = 1
                     if pos < 0:
+                        n_len += 1
                         continue
                     buf.add(ref_names[tid], pos, pos + 1, st)
+                    n_kept += 1
 
             elif pairing == "read1":
                 for read in bam.fetch(until_eof=True):
+                    n_seen += 1
+                    tid = read.reference_id
+                    if progress is not None and (tid != progress.tid or n_seen >= progress.next_at):
+                        progress.update(n_seen, tid, n_kept)
                     if read.flag & excl:
+                        n_flag += 1
                         continue
                     if not read.is_proper_pair or not read.is_read1:
+                        n_pair += 1
                         continue
                     if read.mapping_quality < min_mapq:
+                        n_mapq += 1
                         continue
-                    tid = read.reference_id
-                    if tid not in allowed_tids or read.next_reference_id != tid:
+                    if tid not in allowed_tids:
+                        n_chrom += 1
+                        continue
+                    if read.next_reference_id != tid:
+                        n_pair += 1
                         continue
                     tlen = read.template_length
                     if tlen == 0:
+                        n_pair += 1
                         continue
                     if tlen > 0:
                         start = read.reference_start
@@ -782,6 +883,7 @@ class FragmentStore:
                     else:
                         ref_end = read.reference_end
                         if ref_end is None:
+                            n_pair += 1
                             continue
                         end = ref_end
                         start = end + tlen
@@ -790,23 +892,36 @@ class FragmentStore:
                     end += right_shift
                     frag_len = end - start
                     if start < 0 or frag_len < min_len or frag_len > max_len:
+                        n_len += 1
                         continue
                     buf.add(ref_names[tid], start, end)
+                    n_kept += 1
 
             else:  # pairing == "mate"
                 pending: dict[tuple[int, str], tuple[int, int]] = {}
                 for read in bam.fetch(until_eof=True):
+                    n_seen += 1
+                    tid = read.reference_id
+                    if progress is not None and (tid != progress.tid or n_seen >= progress.next_at):
+                        progress.update(n_seen, tid, n_kept)
                     if read.flag & excl:
+                        n_flag += 1
                         continue
                     if not read.is_proper_pair:
+                        n_pair += 1
                         continue
                     if read.mapping_quality < min_mapq:
+                        n_mapq += 1
                         continue
-                    tid = read.reference_id
-                    if tid not in allowed_tids or read.next_reference_id != tid:
+                    if tid not in allowed_tids:
+                        n_chrom += 1
+                        continue
+                    if read.next_reference_id != tid:
+                        n_pair += 1
                         continue
                     ref_end = read.reference_end
                     if ref_end is None:
+                        n_pair += 1
                         continue
                     key = (tid, read.query_name)
                     mate = pending.pop(key, None)
@@ -817,10 +932,20 @@ class FragmentStore:
                         end = max(mate[1], ref_end) + right_shift
                         frag_len = end - start
                         if start < 0 or frag_len < min_len or frag_len > max_len:
+                            n_len += 1
                             continue
                         buf.add(ref_names[tid], start, end)
+                        n_kept += 1
+                n_unpaired = len(pending)
+
+        if progress is not None:
+            progress.log(
+                f"finished reading: {_fmt_count(n_seen)} records, {_fmt_count(n_kept)} fragments; "
+                "sorting" + (" and deduplicating" if dedup_coords else "")
+            )
 
         starts_np, ends_np, strands_np = buf.to_numpy()
+        del buf
 
         store = cls(
             starts=starts_np,
@@ -831,8 +956,52 @@ class FragmentStore:
             sort=True,
             dedup=dedup_coords,
         )
+        n_after_dedup = store.n_fragments
         if exclude_regions is not None:
+            if progress is not None:
+                progress.log("removing blacklisted fragments")
             store = store.exclude_regions(exclude_regions, mode=exclude_mode)
+
+        stats: dict[str, Any] = {
+            "records_read": n_seen,
+            "skipped_flag": n_flag,
+            "skipped_pairing": n_pair,
+            "skipped_mapq": n_mapq,
+            "skipped_chrom": n_chrom,
+            "skipped_length": n_len,
+            "fragments_parsed": n_kept,
+            "removed_coord_dedup": n_kept - n_after_dedup,
+            "removed_blacklist": n_after_dedup - store.n_fragments,
+            "fragments_kept": store.n_fragments,
+        }
+        if cfg.paired_end and pairing == "mate":
+            stats["unpaired_mates"] = n_unpaired
+        if progress is not None:
+            stats["seconds"] = round(progress.elapsed(), 2)
+        store.metadata["ingest_stats"] = stats
+
+        if progress is not None:
+            pct = (lambda k: f"{100.0 * k / n_seen:5.1f}%") if n_seen else (lambda k: "  n/a")
+            lines = [
+                f"records read          {n_seen:>14,}",
+                f"  skipped: SAM flags  {n_flag:>14,}  {pct(n_flag)}  (exclude_flags=0x{excl:x})",
+                f"  skipped: pairing    {n_pair:>14,}  {pct(n_pair)}"
+                + ("  (includes every mate-2 record: one fragment per R1)"
+                   if cfg.paired_end and pairing == "read1" else ""),
+                f"  skipped: MAPQ<{min_mapq:<3}   {n_mapq:>14,}  {pct(n_mapq)}",
+                f"  skipped: chromosome {n_chrom:>14,}  {pct(n_chrom)}",
+                f"  skipped: length     {n_len:>14,}  {pct(n_len)}  (outside {min_len}-{max_len} bp)",
+            ]
+            if "unpaired_mates" in stats:
+                lines.append(f"  mates never paired  {n_unpaired:>14,}")
+            lines += [
+                f"fragments parsed      {n_kept:>14,}",
+                f"  removed: coord dedup{stats['removed_coord_dedup']:>14,}",
+                f"  removed: blacklist  {stats['removed_blacklist']:>14,}"
+                + (f"  ({exclude_mode})" if exclude_regions is not None else "  (none given)"),
+                f"fragments kept        {store.n_fragments:>14,}  on {len(store.chroms)} chromosomes",
+            ]
+            progress.log("done\n    " + "\n    ".join(lines))
         return store
 
     @classmethod
@@ -1399,7 +1568,10 @@ class FragmentStore:
 
         All stores must share one assay configuration (and all be stranded or none);
         otherwise pass ``assay=`` to say which one the merged store should carry. The
-        merged store records the ``source`` of each input in ``metadata["merged_from"]``.
+        merged store records the ``source`` of each input in ``metadata["merged_from"]``
+        and each input's full metadata (``ingest_stats``, ``exclude_regions``, ...) in
+        ``metadata["merged_inputs"]``, in input order. With ``dedup=True`` the number of
+        coordinate duplicates removed across inputs is ``metadata["removed_coord_dedup"]``.
         """
         store_list = list(stores)
         if not store_list:
@@ -1444,12 +1616,20 @@ class FragmentStore:
                 ]
                 strands[c] = np.concatenate(t_parts) if t_parts else np.empty(0, dtype=np.int8)
 
-        return cls(
+        n_in = int(sum(st.n_fragments for st in store_list))
+        merged = cls(
             starts=starts,
             ends=ends,
             assay=assay_cfg,
             strands=strands,
-            metadata={"source_type": "merge", "merged_from": [st.metadata.get("source") for st in store_list]},
+            metadata={
+                "source_type": "merge",
+                "merged_from": [st.metadata.get("source") for st in store_list],
+                "merged_inputs": [dict(st.metadata) for st in store_list],
+            },
             sort=True,
             dedup=dedup,
         )
+        if dedup:
+            merged.metadata["removed_coord_dedup"] = n_in - merged.n_fragments
+        return merged

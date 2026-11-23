@@ -340,3 +340,98 @@ def test_chrom_buffers_are_compact_and_exact():
     assert buf.starts["chr1"].itemsize == 4  # not a list of Python ints
     with pytest.raises(OverflowError):
         buf.add("chr3", 2**31, 2**31 + 1)
+
+
+def test_from_bam_ingest_stats_read1(tmp_path: Path):
+    bam_path = tmp_path / "paired.bam"
+    _write_synthetic_paired_bam(bam_path)
+    store = FragmentStore.from_bam(
+        bam_path, assay="chec", min_mapq=20, dedup=False, exclude_chroms={"chrM"}, pairing="read1"
+    )
+    st = store.metadata["ingest_stats"]
+    # 8 pairs = 16 records: q6 secondary (2 flag), 7 mate-2 records of the rest (pairing),
+    # q5 R1 low MAPQ, q8 R1 on chrM, and 5 fragments parsed.
+    assert st["records_read"] == 16
+    assert st["skipped_flag"] == 2
+    assert st["skipped_pairing"] == 7
+    assert st["skipped_mapq"] == 1
+    assert st["skipped_chrom"] == 1
+    assert st["skipped_length"] == 0
+    assert st["fragments_parsed"] == 5
+    assert st["removed_coord_dedup"] == 0 and st["removed_blacklist"] == 0
+    assert st["fragments_kept"] == store.n_fragments == 5
+    assert "seconds" not in st  # only timed when verbose
+    skipped = sum(v for k, v in st.items() if k.startswith("skipped_"))
+    assert skipped + st["fragments_parsed"] == st["records_read"]
+
+
+def test_from_bam_ingest_stats_mate_dedup_blacklist(tmp_path: Path):
+    bam_path = tmp_path / "paired.bam"
+    _write_synthetic_paired_bam(bam_path)
+    mate = FragmentStore.from_bam(
+        bam_path, assay="chec", min_mapq=20, dedup=False, exclude_chroms={"chrM"}, pairing="mate"
+    )
+    st = mate.metadata["ingest_stats"]
+    assert (st["skipped_flag"], st["skipped_pairing"], st["skipped_mapq"], st["skipped_chrom"]) == (2, 0, 2, 2)
+    assert st["fragments_parsed"] == 5 and st["unpaired_mates"] == 0
+
+    blacklist = pd.DataFrame({"chrom": ["chr1"], "start": [1990], "end": [2010]})
+    dd = FragmentStore.from_bam(
+        bam_path, assay="chec", min_mapq=20, dedup=True, exclude_chroms={"chrM"},
+        exclude_regions=blacklist,
+    )
+    st = dd.metadata["ingest_stats"]
+    assert st["skipped_flag"] == 4  # q6 secondary + q4 SAM duplicate, both mates
+    assert st["fragments_parsed"] == 4  # q1, q2, q3, q7
+    assert st["removed_coord_dedup"] == 1  # q3 duplicates q1
+    assert st["removed_blacklist"] == 1  # q2 [2000, 2150) overlaps the region
+    assert st["fragments_kept"] == dd.n_fragments == 2
+
+
+def test_from_bam_verbose_reports_and_matches_silent(tmp_path: Path, capsys):
+    bam_path = tmp_path / "paired.bam"
+    _write_synthetic_paired_bam(bam_path)
+    kw = dict(assay="chec", min_mapq=20, dedup=False, exclude_chroms={"chrM"})
+    quiet = FragmentStore.from_bam(bam_path, **kw)
+    assert capsys.readouterr().err == ""
+    loud = FragmentStore.from_bam(bam_path, verbose=True, **kw)
+    err = capsys.readouterr().err
+    assert "[pyvplot.from_bam" in err
+    assert "now on chr1" in err and "now on chr2" in err
+    assert "records read" in err and "fragments kept" in err and "skipped: MAPQ" in err
+    for c in quiet.chroms:
+        np.testing.assert_array_equal(quiet.starts[c], loud.starts[c])
+        np.testing.assert_array_equal(quiet.ends[c], loud.ends[c])
+    assert loud.metadata["ingest_stats"]["seconds"] >= 0
+
+    loud.save(tmp_path / "s.frags.npz")
+    back = FragmentStore.load(tmp_path / "s.frags.npz")
+    assert back.metadata["ingest_stats"]["records_read"] == 16
+
+
+def test_from_bam_ingest_stats_chip_exo(tmp_path: Path):
+    bam_path = tmp_path / "exo.bam"
+    _write_synthetic_chip_exo_bam(bam_path)
+    store = FragmentStore.from_bam(bam_path, assay="chip_exo", min_mapq=20, verbose=True)
+    st = store.metadata["ingest_stats"]
+    assert st["fragments_kept"] == store.n_fragments
+    skipped = sum(v for k, v in st.items() if k.startswith("skipped_"))
+    assert skipped + st["fragments_parsed"] == st["records_read"]
+
+
+def test_merge_keeps_input_metadata(tmp_path: Path):
+    bam_path = tmp_path / "paired.bam"
+    _write_synthetic_paired_bam(bam_path)
+    blacklist = pd.DataFrame({"chrom": ["chr1"], "start": [1990], "end": [2010]})
+    a = FragmentStore.from_bam(bam_path, assay="chec", exclude_chroms={"chrM"})
+    b = FragmentStore.from_bam(bam_path, assay="chec", exclude_chroms={"chrM"}, exclude_regions=blacklist)
+    merged = FragmentStore.merge([a, b], dedup=True)
+    inputs = merged.metadata["merged_inputs"]
+    assert [m["ingest_stats"]["fragments_kept"] for m in inputs] == [5, 4]
+    assert "exclude_regions" not in inputs[0] and inputs[1]["exclude_regions"][0]["n_removed"] == 1
+    assert merged.metadata["merged_from"] == [str(bam_path), str(bam_path)]
+    assert merged.metadata["removed_coord_dedup"] == 9 - merged.n_fragments
+    merged.save(tmp_path / "m.frags.npz")
+    back = FragmentStore.load(tmp_path / "m.frags.npz")
+    assert back.metadata["merged_inputs"][1]["ingest_stats"]["removed_blacklist"] == 1
+    assert "removed_coord_dedup" not in FragmentStore.merge([a, b]).metadata
