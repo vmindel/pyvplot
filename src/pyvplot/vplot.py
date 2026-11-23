@@ -388,6 +388,14 @@ class VPlot:
             b = b.normalize(normalize_first)
 
         if smooth_sigma is not None and smooth_before:
+            if "smooth_sigma" in a.metadata or "smooth_sigma" in b.metadata:
+                warnings.warn(
+                    "One or both V-plots were already smoothed before diff(), and smooth_sigma="
+                    f"{smooth_sigma!r} will smooth them a second time. Pass raw/unsmoothed V-plots "
+                    "to diff(smooth_sigma=...) or omit smooth_sigma.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             a = a.smooth(smooth_sigma)
             b = b.smooth(smooth_sigma)
 

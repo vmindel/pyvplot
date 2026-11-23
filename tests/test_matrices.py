@@ -121,3 +121,24 @@ def test_signal_matrix_normalize_is_not_compounding():
     assert cpm.raw_count_scale() == pytest.approx(0.5)
     assert raw.normalize("rpkm").raw_count_scale() == pytest.approx(0.5 / 0.01)
     assert raw.normalize("zscore").raw_count_scale() is None
+
+
+def test_footprint_score_pseudocount_is_scale_aware_and_bed_duplicates_are_unique(tmp_path):
+    import pyvplot as vp
+
+    store, anchors = _make_protected_motif_store()
+    sc_raw = store.footprint_score(anchors, motif_half_width=10, flank_width=25)
+    sc_cpm = store.footprint_score(anchors, motif_half_width=10, flank_width=25, normalize="cpm")
+    sc_rpkm = store.footprint_score(anchors, motif_half_width=10, flank_width=25, normalize="rpkm")
+    # Protection score is a log2 ratio of flank vs center density and must be invariant to CPM/RPKM scaling
+    np.testing.assert_allclose(sc_cpm["protection_score"], sc_raw["protection_score"], rtol=1e-9, atol=1e-9)
+    np.testing.assert_allclose(sc_rpkm["protection_score"], sc_raw["protection_score"], rtol=1e-9, atol=1e-9)
+
+    # BED file with identical column-4 TF name on every row gets unique anchor IDs
+    bed = tmp_path / "ctcf.bed"
+    bed.write_text("chr1\t1990\t2010\tCTCF\t100\t+\nchr1\t5990\t6010\tCTCF\t80\t-\n")
+    sc_bed = store.footprint_score(bed, motif_half_width=10, flank_width=25)
+    assert sc_bed.index.tolist() == ["CTCF_0", "CTCF_1"]
+    mat_bed = store.to_matrix(bed, flank=50, bin_size=10)
+    assert mat_bed.region_index.tolist() == ["CTCF_0", "CTCF_1"]
+    assert mat_bed.to_dataframe()["anchor"].nunique() == 2

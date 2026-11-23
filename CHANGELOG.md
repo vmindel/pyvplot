@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added (bias correction helpers)
+- `extract_anchor_sequences` extracts 5'->3' anchor-oriented DNA sequences (with edge-exact k-mer padding and `-` strand reverse-complementation) from a genome FASTA or `{chrom: seq}` dict. `KmerBiasTable.correct_matrix` accepts a genome FASTA/dict directly when `anchors=` is provided, and `KmerBiasTable.correct_footprint` bias-corrects a `CutSiteFootprint` (strand-split or combined).
+
+### Fixed (single-locus, footprint score, and BED anchors)
+- `locus_vplot` with a `-` strand motif and `coords="genomic"` now preserves the motif's 5'->3' biological orientation for `cuts_plus`/`cuts_minus` and proximal/distal tie-breaking.
+- `LocusVPlot.to_vplot` uses strict half-open length and position bins `[min_len, max_len)` matching `store.vplot` (instead of `np.histogram2d`'s closed upper bin) and populates `genome_len_counts` so `normalize("expected", expected_from="genome")` works.
+- `footprint_score` scales `pseudocount` by `raw_count_scale()` when `normalize` is used (e.g. `"cpm"` or `"rpkm"`), so `protection_score` is invariant to normalization units and sequencing depth.
+- `_read_anchors_bed` deduplicates repeated column-4 motif names (`CTCF_0`, `CTCF_1`, ...) so `footprint_score` and `SignalMatrix.to_dataframe()` keep distinct per-locus identifiers.
+- `VPlot.diff` warns when `smooth_sigma` is passed and one or both V-plots were already smoothed before `diff()`.
+
 ### Added (merge provenance)
 - `FragmentStore.merge` keeps each input's metadata (including `ingest_stats` and `exclude_regions`) in `metadata["merged_inputs"]`, and with `dedup=True` records `metadata["removed_coord_dedup"]`.
 

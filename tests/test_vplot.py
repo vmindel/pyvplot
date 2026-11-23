@@ -193,3 +193,10 @@ def test_diff_rejects_mixed_units_but_accepts_matching_ones():
         cpm.diff(_raw_vplot().normalize("per_anchor"))
     assert cpm.diff(_raw_vplot(2.0).normalize("cpm")).is_diff
     assert raw.diff(_raw_vplot(2.0)).is_diff  # two raw V-plots are normalised to CPM first
+
+
+def test_diff_warns_on_double_smoothing():
+    a = _raw_vplot(1.0).smooth(1.0)
+    b = _raw_vplot(2.0).smooth(1.0)
+    with pytest.warns(UserWarning, match="already smoothed"):
+        a.diff(b, smooth_sigma=(1.0, 1.0))

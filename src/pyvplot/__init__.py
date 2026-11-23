@@ -18,7 +18,12 @@ from pyvplot.assays import (
     register_assay,
     resolve_len_range,
 )
-from pyvplot.bias import KmerBiasTable, normalize_by_control, reverse_complement
+from pyvplot.bias import (
+    KmerBiasTable,
+    extract_anchor_sequences,
+    normalize_by_control,
+    reverse_complement,
+)
 from pyvplot.export import to_bedgraph, to_bigwig, to_binned_track, to_pymisha
 from pyvplot.extract import (
     HAS_NUMBA,
@@ -64,6 +69,7 @@ __all__ = [
     "cut_site_footprint",
     "datasets",
     "estimate_nrl",
+    "extract_anchor_sequences",
     "extract_events",
     "footprint_score",
     "frip",

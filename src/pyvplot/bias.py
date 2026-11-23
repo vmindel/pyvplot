@@ -11,7 +11,8 @@ import numpy as np
 import pandas as pd
 
 from pyvplot.assays import get_assay
-from pyvplot.matrices import SignalMatrix
+from pyvplot.extract import normalize_anchors
+from pyvplot.matrices import CutSiteFootprint, SignalMatrix
 from pyvplot.store import FragmentStore
 from pyvplot.vplot import VPlot
 
@@ -143,6 +144,113 @@ def _get_chrom_seq(sequences: Any, chrom: str) -> str | None:
     if chrom in sequences:
         return str(sequences[chrom][:].seq if hasattr(sequences[chrom][:], "seq") else sequences[chrom])
     return None
+
+
+def _fetch_subseq(genome: Any, chrom_cache: dict[str, str | None], chrom: str, start: int, end: int) -> str:
+    """Fetch genomic interval ``[start, end)`` padding out-of-bounds or missing chromosomes with ``'N'``."""
+    width = end - start
+    if width <= 0:
+        return ""
+    if hasattr(genome, "fetch") and not isinstance(genome, dict):
+        try:
+            chrom_len = int(genome.get_reference_length(chrom)) if hasattr(genome, "get_reference_length") else None
+            s0 = max(0, start)
+            e0 = min(chrom_len, end) if chrom_len is not None else max(0, end)
+            if e0 <= s0:
+                return "N" * width
+            core = str(genome.fetch(chrom, s0, e0))
+            pad_l = s0 - start
+            pad_r = width - pad_l - len(core)
+            return ("N" * pad_l) + core + ("N" * max(0, pad_r))
+        except (KeyError, ValueError):
+            return "N" * width
+
+    if chrom not in chrom_cache:
+        chrom_cache[chrom] = _get_chrom_seq(genome, chrom)
+    seq = chrom_cache[chrom]
+    if seq is None:
+        return "N" * width
+    s0 = max(0, start)
+    e0 = min(len(seq), end)
+    if e0 <= s0:
+        return "N" * width
+    core = seq[s0:e0]
+    pad_l = s0 - start
+    pad_r = width - pad_l - len(core)
+    return ("N" * pad_l) + core + ("N" * max(0, pad_r))
+
+
+def extract_anchor_sequences(
+    anchors: Any,
+    sequences: Any,
+    flank: int = 100,
+    upstream: int | None = None,
+    downstream: int | None = None,
+    k: int | None = None,
+    cut_offset: int | None = None,
+    orient: bool = True,
+) -> list[str]:
+    """Extract 5'->3' anchor-oriented DNA sequences from a genome FASTA or ``{chrom: seq}`` dict.
+
+    When ``k`` is given, each sequence is padded by ``cut_offset`` bases on the
+    upstream edge and ``k - 1 - cut_offset`` bases on the downstream edge so
+    every 1-bp bin in ``[-upstream, +downstream)`` has a complete k-mer for
+    [`KmerBiasTable.correct_matrix`][pyvplot.KmerBiasTable.correct_matrix].
+    Positions extending beyond chromosome bounds (or on chromosomes absent from
+    ``sequences``) are padded with ``'N'`` (neutral bias weight ``1.0``).
+
+    Parameters
+    ----------
+    anchors:
+        Anchor table (DataFrame, dict, or BED path).
+    sequences:
+        Genome sequence: FASTA path (plain or ``.gz``), ``pysam.FastaFile``,
+        ``pyfaidx.Fasta``, or ``{chrom: str}`` dict.
+    flank:
+        Symmetric half-window (bp) around each anchor center.
+    upstream, downstream:
+        Optional asymmetric window bounds (bp), overriding ``flank``.
+    k:
+        Optional k-mer length for edge-exact padding (adds ``k - 1`` bases).
+    cut_offset:
+        Cut offset within the k-mer (default ``k // 2`` when ``k`` is provided).
+    orient:
+        If ``True`` (default), reverse-complement ``-`` strand anchors so the
+        returned strings are already in 5'->3' anchor orientation.
+    """
+    up = int(flank if upstream is None else upstream)
+    dn = int(flank if downstream is None else downstream)
+    if k is not None:
+        offset = k // 2 if cut_offset is None else int(cut_offset)
+        pad_l = offset
+        pad_r = int(k) - 1 - offset
+    else:
+        pad_l = pad_r = 0
+
+    norm = normalize_anchors(anchors)
+    if norm.n_anchors == 0:
+        return []
+
+    genome = _open_genome(sequences)
+    chrom_cache: dict[str, str | None] = {}
+    out: list[str] = []
+
+    for i in range(norm.n_anchors):
+        chrom = str(norm.chroms[i])
+        c = int(np.floor(float(norm.centers[i])))
+        st = int(norm.strands[i])
+        if st >= 0 or not orient:
+            g_start = c - up - pad_l
+            g_end = c + dn + pad_r
+            sub = _fetch_subseq(genome, chrom_cache, chrom, g_start, g_end)
+        else:
+            # For a '-' anchor, anchor-oriented [-up - pad_l, +dn + pad_r) corresponds to
+            # genomic [c - dn - pad_r, c + up + pad_l) reverse-complemented.
+            g_start = c - dn - pad_r
+            g_end = c + up + pad_l
+            sub = reverse_complement(_fetch_subseq(genome, chrom_cache, chrom, g_start, g_end))
+        out.append(sub)
+    return out
 
 
 _FEATURE_FRAME = {
@@ -454,12 +562,13 @@ class KmerBiasTable:
     def correct_matrix(
         self,
         signal_matrix: SignalMatrix,
-        sequences: Sequence[str],
+        sequences: Any,
         strands: Sequence[str | int] | None = None,
         pseudocount: float = 1e-6,
         preserve_scale: bool = True,
+        anchors: Any = None,
     ) -> SignalMatrix:
-        """Bias-correct a 1-bp [`SignalMatrix`][pyvplot.SignalMatrix] using anchor sequences.
+        """Bias-correct a 1-bp [`SignalMatrix`][pyvplot.SignalMatrix] using anchor sequences or a genome FASTA.
 
         The expectation follows ``signal_matrix.feature``: ``"cuts_plus"`` (left ends) is
         scored on the forward strand, ``"cuts_minus"`` (right ends) on the reverse strand
@@ -471,20 +580,46 @@ class KmerBiasTable:
         signal_matrix:
             1-bp resolution ``(n_anchors, n_bins)`` cut-site matrix.
         sequences:
-            DNA sequences spanning each anchor window (length ``n_bins``, or
-            padded by ``cut_offset`` on the left and ``k - 1 - cut_offset`` on
-            the right for edge-exact k-mer scoring).
+            Either per-anchor DNA sequence strings (length ``n_bins``, or padded
+            by ``cut_offset`` on the left and ``k - 1 - cut_offset`` on the right
+            for edge-exact k-mer scoring), **or** a genome FASTA path /
+            ``pysam.FastaFile`` / ``{chrom: seq}`` dict when ``anchors`` is also
+            provided.
         strands:
             Optional per-anchor strands (``"+"`` / ``"-"``). If sequences are
-            already oriented 5'->3' along each anchor, leave as ``None``.
+            already oriented 5'->3' along each anchor (or extracted via
+            ``anchors=``), leave as ``None``.
+        anchors:
+            Optional anchor table (DataFrame, dict, or BED path). When provided,
+            ``sequences`` is treated as a genome reference and per-anchor
+            sequences are extracted automatically with [`extract_anchor_sequences`][pyvplot.extract_anchor_sequences].
         """
         if signal_matrix.bin_size != 1:
             raise ValueError(
                 f"Sequence bias correction requires bin_size=1, got bin_size={signal_matrix.bin_size}."
             )
-        if len(sequences) != signal_matrix.n_anchors:
+        if anchors is not None:
+            seq_list: Sequence[str] = extract_anchor_sequences(
+                anchors,
+                sequences,
+                upstream=signal_matrix.upstream,
+                downstream=signal_matrix.downstream,
+                k=self.k,
+                cut_offset=self.cut_offset,
+                orient=True,
+            )
+            strands = None
+        else:
+            if isinstance(sequences, (str, Path, dict)) or hasattr(sequences, "fetch"):
+                raise ValueError(
+                    "When passing a genome FASTA or {chrom: seq} dict to `sequences`, "
+                    "also pass `anchors=` so per-anchor windows can be extracted."
+                )
+            seq_list = sequences
+
+        if len(seq_list) != signal_matrix.n_anchors:
             raise ValueError(
-                f"Expected {signal_matrix.n_anchors} sequences, got {len(sequences)}."
+                f"Expected {signal_matrix.n_anchors} sequences, got {len(seq_list)}."
             )
         frame = _FEATURE_FRAME.get(signal_matrix.feature)
         if frame is None:
@@ -493,7 +628,7 @@ class KmerBiasTable:
                 f"{signal_matrix.feature!r}. Use 'cuts', 'cuts_plus' or 'cuts_minus'."
             )
         stranded = _is_stranded_assay(signal_matrix.assay)
-        exp_full = self.expected_matrix(sequences, strands=strands, frame=frame, stranded=stranded)
+        exp_full = self.expected_matrix(seq_list, strands=strands, frame=frame, stranded=stranded)
         n_bins = signal_matrix.n_bins
         pad_left = self.cut_offset
         pad_right = self.k - 1 - self.cut_offset
@@ -528,6 +663,108 @@ class KmerBiasTable:
             normalization=f"{signal_matrix.normalization}+kmer_bias",
             metadata={**signal_matrix.metadata, "bias_k": self.k},
             motif_overlap=signal_matrix.motif_overlap,
+        )
+
+    def correct_footprint(
+        self,
+        footprint: CutSiteFootprint,
+        sequences: Any,
+        strands: Sequence[str | int] | None = None,
+        pseudocount: float = 1e-6,
+        preserve_scale: bool = True,
+        anchors: Any = None,
+    ) -> CutSiteFootprint:
+        """Bias-correct a 1-bp [`CutSiteFootprint`][pyvplot.CutSiteFootprint] (strand-split or combined).
+
+        Requires ``footprint`` to have been computed with ``keep_matrices=True``
+        (the default) and ``split_by="strand"`` or ``None``. Corrects the
+        underlying per-anchor matrices in their respective cleavage frames
+        (``+`` on forward, ``-`` on reverse) and re-aggregates the profiles.
+        """
+        if footprint.split_by == "proximity":
+            raise ValueError(
+                "Sequence bias correction applies to strand-split ('cuts_plus'/'cuts_minus') "
+                "or unsplit ('cuts') footprints, not split_by='proximity'."
+            )
+        if footprint.matrix_combined is None:
+            raise ValueError(
+                "correct_footprint requires per-anchor matrices on the CutSiteFootprint; "
+                "build it with keep_matrices=True (the default)."
+            )
+
+        if anchors is not None:
+            m_ref = footprint.matrix_combined
+            seq_list: Sequence[str] = extract_anchor_sequences(
+                anchors,
+                sequences,
+                upstream=m_ref.upstream,
+                downstream=m_ref.downstream,
+                k=self.k,
+                cut_offset=self.cut_offset,
+                orient=True,
+            )
+            strands = None
+        else:
+            seq_list = sequences
+
+        reducer = np.mean if footprint.agg == "mean" else np.sum
+
+        def _prof(m: SignalMatrix) -> np.ndarray:
+            if m.n_anchors == 0:
+                return np.zeros(m.n_bins, dtype=np.float64)
+            return np.asarray(reducer(m.values, axis=0), dtype=np.float64)
+
+        if footprint.matrix_plus is not None and footprint.matrix_minus is not None:
+            m_plus = self.correct_matrix(
+                footprint.matrix_plus, seq_list, strands=strands,
+                pseudocount=pseudocount, preserve_scale=preserve_scale,
+            )
+            m_minus = self.correct_matrix(
+                footprint.matrix_minus, seq_list, strands=strands,
+                pseudocount=pseudocount, preserve_scale=preserve_scale,
+            )
+            m_comb = SignalMatrix(
+                values=m_plus.values + m_minus.values,
+                region_index=m_plus.region_index.copy(),
+                upstream=m_plus.upstream,
+                downstream=m_plus.downstream,
+                bin_size=m_plus.bin_size,
+                feature="cuts",
+                len_range=m_plus.len_range,
+                n_fragments=m_plus.n_fragments,
+                assay=m_plus.assay,
+                normalization=m_plus.normalization,
+                metadata=dict(m_plus.metadata),
+                motif_overlap=footprint.motif_overlap,
+            )
+            p_plus = _prof(m_plus)
+            p_minus = _prof(m_minus)
+            return CutSiteFootprint(
+                pos=footprint.pos.copy(),
+                combined=p_plus + p_minus,
+                plus=p_plus,
+                minus=p_minus,
+                matrix_combined=m_comb,
+                matrix_plus=m_plus,
+                matrix_minus=m_minus,
+                n_anchors=footprint.n_anchors,
+                agg=footprint.agg,
+                split_by=footprint.split_by,
+                motif_overlap=footprint.motif_overlap,
+            )
+
+        m_comb = self.correct_matrix(
+            footprint.matrix_combined, seq_list, strands=strands,
+            pseudocount=pseudocount, preserve_scale=preserve_scale,
+        )
+        return CutSiteFootprint(
+            pos=footprint.pos.copy(),
+            combined=_prof(m_comb),
+            matrix_combined=m_comb,
+            n_anchors=footprint.n_anchors,
+            agg=footprint.agg,
+            split_by=footprint.split_by,
+            motif_overlap=footprint.motif_overlap,
         )
 
 

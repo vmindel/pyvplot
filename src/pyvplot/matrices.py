@@ -671,7 +671,9 @@ def footprint_score(
     center_density = center_cuts / center_bp
     flank_density = flank_cuts / flank_bp
 
-    protection = np.log2((flank_density + pseudocount) / (center_density + pseudocount))
+    scale = mat.raw_count_scale() if normalize is not None else 1.0
+    pc = float(pseudocount) * (scale if scale is not None else 1.0)
+    protection = np.log2((flank_density + pc) / (center_density + pc))
     depth = center_density - flank_density
     accessibility = (center_cuts + flank_cuts) / (center_bp + flank_bp)
 
