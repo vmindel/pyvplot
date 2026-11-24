@@ -230,7 +230,11 @@ def extract_anchor_sequences(
     For paired-end data, right-end (reverse-frame) cuts need one more base of left
     padding than ``cut_offset`` provides when ``k`` is odd, so with odd ``k`` the
     first bin of a ``cuts_minus`` (or the right-end half of a ``cuts``) expectation
-    keeps the neutral weight ``1.0``.
+    keeps the neutral weight ``1.0``. For stranded 5'-end data the same happens to
+    the last reverse-frame bin when ``k`` is even.
+
+    Call it with ``stranded=True`` for stranded stores when you pass the result to
+    ``correct_matrix`` yourself; ``correct_matrix(anchors=)`` does this for you.
     """
     up = int(flank if upstream is None else upstream)
     dn = int(flank if downstream is None else downstream)

@@ -363,9 +363,8 @@ def test_extract_anchor_sequences_stranded_chip_exo_aligns_kmers(width, strand, 
         anchors, {"chr1": g}, upstream=up, downstream=dn, k=k, orient=orient, stranded=True
     )
     strands = None if orient else [strand]
-    for feat in ("cuts_plus", "cuts_minus"):
+    for feat, p in [(f, q) for f in ("cuts_plus", "cuts_minus") for q in (1482, 1495, 1508, 1517)]:
         r_st = 1 if (feat == "cuts_plus") == (strand == "+") else -1
-        p = 1495
         store = FragmentStore(
             {"chr1": np.array([p], dtype=np.int32)},
             {"chr1": np.array([p + 1], dtype=np.int32)},

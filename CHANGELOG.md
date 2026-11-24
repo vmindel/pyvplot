@@ -4,7 +4,7 @@
 
 ### Fixed (bias sequence extraction)
 - `extract_anchor_sequences(..., orient=False)` cut `-` anchors with the `+` anchor window, so after `correct_matrix(strands=...)` their k-mers were shifted: by 1 bp at integer centres with even `k` or half-integer centres with odd `k`, and by `downstream - upstream` bp with asymmetric windows. `-` anchors now keep their own window and are only left un-reverse-complemented. The default `orient=True` and `correct_matrix(anchors=)` were not affected.
-- `extract_anchor_sequences` takes `stranded: bool = False` (passed automatically by `correct_matrix` / `correct_footprint` for stranded single-end stores such as `chip_exo`), shifting `-` anchor windows by +1 bp because 5'-end reads are indexed by their base `[s, s + 1)` rather than a right fragment boundary.
+- Stranded single-end stores (`chip_exo`): every read at a `-` anchor was scored with the k-mer one base off, including through `correct_matrix(anchors=)` / `correct_footprint(anchors=)`. A 5'-end read is stored as its base `[s, s + 1)`, not a fragment boundary, so the `-` anchor window sits 1 bp further right. `extract_anchor_sequences` takes `stranded: bool = False`, which `correct_matrix` / `correct_footprint` set from the store's assay; pass `stranded=True` yourself when extracting sequences by hand for a stranded store. `+` anchors and paired-end stores are unchanged.
 - `locus_vplot(..., orient=False)` on a `-` strand motif keeps the motif's 5'->3' biological end selection (`upstream`/`downstream`/`proximal`/`distal`) while leaving the relative `x` axis and `xlim` unflipped.
 
 ### Added (bias correction helpers)
