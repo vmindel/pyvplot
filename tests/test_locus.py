@@ -259,3 +259,14 @@ def test_motif_cut_ends_are_labelled_upstream_downstream():
     assert {c.get_label(): to_hex(c.get_facecolor()[0], keep_alpha=False) for c in ax.collections}["upstream"] == "#000000"
     # without a motif the ends are still genomic left/right
     assert st.locus_vplot("chr1:950-1050", feature="cuts_plus").points["end"].tolist() == ["left"]
+
+    # orient=False on a '-' motif keeps the biological upstream/downstream end selection
+    # while leaving the relative x axis unflipped (genomic direction).
+    up_unoriented = st.locus_vplot(
+        "chr1:950-1060", motif="chr1:995-1005:-", feature="cuts_plus", coords="relative", orient=False
+    )
+    assert up_unoriented.points["end"].tolist() == ["upstream"]
+    assert up_unoriented.points["pos"].tolist() == [1030.0]
+    assert up_unoriented.points["x"].tolist() == [30.0]
+    assert up_unoriented.xlim == (-50.0, 60.0)
+    assert up_unoriented.motif_span == (-5.0, 5.0)
