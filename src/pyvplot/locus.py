@@ -86,6 +86,7 @@ class LocusVPlot:
     motif_overlap: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     store_n_fragments: int = 0
+    orient: bool = True
     # 1-bp histogram of every fragment length in the source store (index = length), for
     # to_vplot()'s genome_len_counts. A histogram, not the lengths: a few kB instead of 4 bytes
     # per fragment held by every LocusVPlot.
@@ -109,7 +110,7 @@ class LocusVPlot:
             return lo, hi
         c = 0.5 * (lo + hi)
         a, b = lo - c, hi - c
-        return (a, b) if self.motif_strand == "+" else (-b, -a)
+        return (-b, -a) if (self.motif_strand == "-" and self.orient) else (a, b)
 
     def to_dataframe(self) -> pd.DataFrame:
         """The plotted points, with the locus attached as ``chrom``."""
@@ -271,8 +272,8 @@ def locus_vplot(
         raise ValueError(f"coords must be 'genomic' or 'relative', got {coords!r}.")
 
     c = 0.5 * (m_lo + m_hi) if has_motif else 0.5 * (L + R)
-    is_minus = has_motif and orient and m_strand == "-"
-    flip_x = coords == "relative" and is_minus
+    is_minus = has_motif and m_strand == "-"
+    flip_x = coords == "relative" and orient and is_minus
     up, dn = (R - c, c - L) if is_minus else (c - L, R - c)
     anchor = pd.DataFrame(
         {"chrom": [chrom], "center": [c], "start": [m_lo], "end": [m_hi], "strand": ["-" if is_minus else "+"]}
@@ -282,7 +283,7 @@ def locus_vplot(
         overlap_mode="any", motif_overlap=motif_overlap,
     )
 
-    rel_lo, rel_hi = -up, dn
+    rel_lo, rel_hi = (-up, dn) if flip_x else (float(L) - c, float(R) - c)
     if len(ev) == 0:
         pts = pd.DataFrame({k: [] for k in ("x", "pos", "frag_len", "end", "motif_overlap")})
     else:
@@ -337,5 +338,6 @@ def locus_vplot(
         assay=store.assay.name,
         motif_overlap=motif_overlap,
         store_n_fragments=store.n_fragments,
+        orient=orient,
         _genome_len_hist=np.bincount(store.lengths()) if store.n_fragments else np.zeros(0, dtype=np.int64),
     )

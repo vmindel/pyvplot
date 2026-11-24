@@ -342,3 +342,41 @@ def test_correct_matrix_rejects_anchors_that_do_not_match_rows():
         tab.correct_matrix(mat, g, anchors=anchors.iloc[::-1])
     with pytest.raises(ValueError, match="same order"):
         tab.correct_footprint(store.cut_site_footprint(anchors, flank=30), g, anchors=anchors.iloc[:1])
+
+
+@pytest.mark.parametrize("orient", [True, False])
+@pytest.mark.parametrize("k", [5, 6])
+@pytest.mark.parametrize("width", [20, 19])
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_extract_anchor_sequences_stranded_chip_exo_aligns_kmers(width, strand, k, orient):
+    import pandas as pd
+
+    import pyvplot as vp
+
+    rng = np.random.default_rng(23)
+    g = "".join(rng.choice(list("ACGT"), 3000))
+    off = k // 2
+    tab = KmerBiasTable(k=k, weights=rng.uniform(0.2, 5.0, 4**k), cut_offset=off)
+    up, dn = 20, 30
+    anchors = pd.DataFrame({"chrom": ["chr1"], "start": [1490], "end": [1490 + width], "strand": [strand]})
+    seqs = vp.extract_anchor_sequences(
+        anchors, {"chr1": g}, upstream=up, downstream=dn, k=k, orient=orient, stranded=True
+    )
+    strands = None if orient else [strand]
+    for feat in ("cuts_plus", "cuts_minus"):
+        r_st = 1 if (feat == "cuts_plus") == (strand == "+") else -1
+        p = 1495
+        store = FragmentStore(
+            {"chr1": np.array([p], dtype=np.int32)},
+            {"chr1": np.array([p + 1], dtype=np.int32)},
+            strands={"chr1": np.array([r_st], dtype=np.int8)},
+            assay="chip_exo",
+        )
+        m = vp.to_matrix(store, anchors, upstream=up, downstream=dn, bin_size=1, feature=feat)
+        b_idx = int(np.flatnonzero(m.values[0])[0])
+        cor = tab.correct_matrix(m, seqs, strands=strands, pseudocount=0, preserve_scale=False)
+        kmer = g[p - off : p - off + k] if r_st > 0 else reverse_complement(g[p + 1 - k + off : p + 1 + off])
+        assert 1.0 / cor.values[0, b_idx] == pytest.approx(tab.score_sequence(kmer)[off])
+        if orient:
+            via_genome = tab.correct_matrix(m, {"chr1": g}, anchors=anchors, pseudocount=0, preserve_scale=False)
+            np.testing.assert_allclose(via_genome.values, cor.values)
