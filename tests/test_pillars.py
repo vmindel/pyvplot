@@ -443,3 +443,40 @@ def test_pillar_expected_cuts_feeds_both_scans():
     pd.testing.assert_frame_equal(via_fn.motifs, via_arr.motifs)
     np.testing.assert_array_equal(via_fn.expected_cuts, f("chr1", 4800, 5200))
     assert len(store.scan_genome_pillars(expected_cuts=f)) > 0
+
+
+def test_plot_draws_calls_at_pair_score_and_threshold_on_them():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    store = _single_footprint_store(5000, 5016)
+    scan = store.scan_locus_pillars("chr1:4800-5200")
+    assert len(scan.motifs) >= 1
+
+    expected = sorted(
+        (int(s), int(e), round(float(p), 6))
+        for s, e, p in scan.motifs[["start", "end", "protection_score"]].itertuples(index=False)
+    )
+    for kwargs, n_axes, prot_idx in (({"store": store}, 4, 1), ({}, 4, 1), ({"mode": "multiscale"}, 4, 2)):
+        fig, axes = scan.plot(**kwargs)
+        assert len(axes) == n_axes
+        for a in axes:
+            assert tuple(round(v) for v in a.get_xlim()) == (4800, 5200)
+        if kwargs.get("mode") != "multiscale":  # multiscale adds colourbar axes
+            assert len(fig.axes) == len(axes)  # no twin y-axes
+        ax_p = axes[prot_idx]
+        bars = sorted(
+            (round(b.get_x()), round(b.get_x() + b.get_width()), round(b.get_height(), 6))
+            for c in ax_p.containers
+            for b in c
+        )
+        assert bars == expected
+        thresholds = [ln.get_ydata()[0] for ln in ax_p.get_lines() if ln.get_linestyle() == "--"]
+        assert thresholds == [scan.metadata["min_protection_score"]]
+        plt.close(fig)
+    fig, ax = plt.subplots()
+    scan.plot(ax=ax)
+    assert len(ax.containers) == len(scan.motifs)
+    plt.close(fig)

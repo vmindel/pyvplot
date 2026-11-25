@@ -68,6 +68,23 @@ print(near[["pos", "pillar_score", "n_len_bins", "left_frac", "strand"]].round(2
 5030          9.75           8       0.27      -
 ```
 
+## Looking at a scan
+
+`scan.plot(store=frags)` draws the evidence for every call in four aligned panels:
+
+```python
+fig, axes = scan.plot(store=frags)
+```
+
+![Pillar scan of chr1:4800-5500: fragment ends by length, pair scores of the two called motifs against the threshold, pillar score, and short-fragment coverage](../img/pillar_scan_locus.png)
+
+- **Fragment ends by length.** Each fragment contributes its start (red) and end (dark blue). A pillar is a vertical stack: ends of every length stopping at one boundary. Diagonals are fragments sharing their other end.
+- **Protection.** Each called motif is a dark bar spanning `[start, end)` at its pair `protection_score`; calls are the bars above the red `min_protection_score` line. The grey 1-bp profile is context only. It dips below zero on the pillars and is not what calls are made from.
+- **Pillar score.** Red dots are called pillars. Only pairs of tall pillars with a depleted core between them become motifs, which is why the 81 background pillars produce nothing.
+- **TF-size coverage.** Short (20–120 bp) fragments covering each position, which weights the pair score.
+
+Without `store=`, the top panel shows the length-resolved cut matrix instead. `scan.plot(ax=ax)` draws the protection track alone into an existing axis, for multi-track figures; `scan.plot(mode="multiscale")` adds the width-resolved protection profile.
+
 ## What the tables hold
 
 `scan.motifs`, one row per called motif:
@@ -185,6 +202,8 @@ for thr in (0.25, 0.5, 0.75, 1.0, 1.5):
 1.00  sample   2  control   0
 1.50  sample   2  control   0
 ```
+
+![Motif calls at or above each min_protection_score for the sample and a background-only control](../img/pillar_calibration.png)
 
 Below 0.75 the control calls about as much as the sample, so those calls are noise; at the default 0.75 the control still makes one; from 1.0 only the two real sites remain. Here `min_protection_score=1.0` is the choice. The control's count at a threshold divided by the sample's estimates the false discovery rate there. Use the same `expected_cuts` and window settings for both scans.
 
