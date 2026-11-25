@@ -45,6 +45,7 @@ nav:
       - Extraction engine: api/extract.md
       - V-plots: api/vplot.md
       - Single locus: api/locus.md
+      - Cut pillars & de-novo motifs: api/pillars.md
       - Matrices & footprints: api/matrices.md
       - QC & nucleosome phasing: api/qc.md
       - Cleavage bias: api/bias.md

@@ -39,6 +39,12 @@ from pyvplot.matrices import (
     footprint_score,
     to_matrix,
 )
+from pyvplot.pillars import (
+    LocusPillarScan,
+    find_active_windows,
+    scan_genome_pillars,
+    scan_locus_pillars,
+)
 from pyvplot.qc import (
     PhasogramResult,
     estimate_nrl,
@@ -60,6 +66,7 @@ __all__ = [
     "FragmentStore",
     "HAS_NUMBA",
     "KmerBiasTable",
+    "LocusPillarScan",
     "LocusVPlot",
     "NormalizedAnchors",
     "PhasogramResult",
@@ -71,6 +78,7 @@ __all__ = [
     "estimate_nrl",
     "extract_anchor_sequences",
     "extract_events",
+    "find_active_windows",
     "footprint_score",
     "frip",
     "get_assay",
@@ -84,6 +92,8 @@ __all__ = [
     "register_assay",
     "resolve_len_range",
     "reverse_complement",
+    "scan_genome_pillars",
+    "scan_locus_pillars",
     "to_bedgraph",
     "to_bigwig",
     "to_binned_track",

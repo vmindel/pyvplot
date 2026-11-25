@@ -19,6 +19,8 @@ PAIRS = [
     "phasogram",
     "frip",
     "qc_summary",
+    "scan_locus_pillars",
+    "scan_genome_pillars",
 ]
 
 
