@@ -152,14 +152,14 @@ When motif coordinates are not known in advance, `scan_locus_pillars()` (for a s
 
 `scan_locus_pillars()` computes:
 
-- `pillar_score`: continuous 1-bp multi-length cut-pillar score $\sum_b \log_2(1 + c_{b,\text{3bp}}(x))$ across 10-bp fragment-length bins;
+- `pillar_score`: continuous 1-bp multi-length cut-pillar score $\sum_b \log_2(1 + c_{b,\text{3bp}}(x))$ across 10-bp fragment-length bins (where index $p$ is the cleavage boundary at genomic coordinate $L + p$);
 - `protection_score`: unthresholded, signed continuous 1-bp protection score (positive inside protected troughs where flanking cut pillars exceed the core; negative on top of cut pillars), weighted smoothly by short-fragment spanning coverage;
-- `pillars` and `motifs`: discrete `chrom, start, end` BED DataFrames called from peaks of the continuous tracks.
+- `pillars` and `motifs`: discrete `chrom, start, end` BED DataFrames. Candidate motifs are called as pairs `(l, r)` of called cut pillars with `r - l` in `motif_width_range` scored by core depletion between them, yielding exact `[l, r)` protected intervals. For assays with strong sequence preference (such as MNase on AT-rich DNA), pass `expected_cuts=` (from [`KmerBiasTable`](../api/bias.md)) or calibrate thresholds on a naked-DNA / free-MNase control.
 
 Use `scan.call(...)` to re-threshold `.motifs` and `.pillars` instantaneously without re-scanning fragments, `scan.to_track_df(...)` / `scan.to_pygenomic_tracks()` to export `chrom, start, end` DataFrames for `pygenomic_tracks`, and `scan.plot(ax=ax)` to draw the continuous 1-bp protection track into an existing figure axis (or `scan.plot()` for a standalone multi-panel QC figure).
 
 ```python
-scan = frags.scan_locus_pillars("chr1:1940-2060", min_len_bins=2)
+scan = frags.scan_locus_pillars("chr1:1940-2060", min_len_bins=2, min_pillar_score=4.0)
 print(scan)
 print(scan.motifs[["chrom", "start", "end", "center", "width"]].to_string(index=False))
 
@@ -173,9 +173,10 @@ print(track_df[["chrom", "start", "end"]].head(2).to_string(index=False))
 ```
 
 ```text
-LocusPillarScan(chr1:1940-2060, n_pillars=0, n_motifs=1)
-chrom  start  end  center  width
- chr1   1986 2014    2000     28
+LocusPillarScan(chr1:1940-2060, n_pillars=5, n_motifs=0)
+Empty DataFrame
+Columns: [chrom, start, end, center, width]
+Index: []
 strict calls: 0
 chrom  start  end
  chr1   1940 1950

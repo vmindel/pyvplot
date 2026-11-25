@@ -1,11 +1,23 @@
-"""Update src/pyvplot/pillars.py with the clean two-sided, core-obstruction-aware,
-coverage-weighted protection score formulation and run unit tests.
+"""Cut-pillar and de-novo protected motif footprint scanning from fragment cleavage geometry.
+
+Identifies multi-length cleavage pillars (genomic boundaries where fragment ends accumulate
+across many distinct fragment lengths) and protected motif footprints (intervals ``[l, r)``
+between pairs of called cleavage pillars at boundaries ``l`` and ``r`` whose core interior is
+depleted of cuts and spanned by short transcription-factor fragments).
+
+Coordinate convention: index ``p`` of ``left_cuts`` / ``right_cuts`` / ``pillar_score`` is the
+cut boundary at genomic coordinate ``L + p`` (a fragment ``[s, e)`` contributes a left cut at
+``s - L`` and a right cut at ``e - L``). The protected bases between pillars at boundaries
+``l`` and ``r`` are ``[l, r)``.
+
+Every result exposes ``chrom, start, end`` pandas DataFrames ready for ``pygenomic_tracks``,
+bedGraph/BED export, or downstream sequence analysis with ``moodspy``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -22,7 +34,7 @@ if HAS_NUMBA:
 
 
 # ---------------------------------------------------------------------------
-# Fast region accumulation & genome active-window scan kernels
+# Fast region accumulation & unified profile kernels
 # ---------------------------------------------------------------------------
 
 def _accumulate_region_py(
@@ -146,262 +158,6 @@ if HAS_NUMBA:
             cov_tf[j] = acc
         return cut_mat, left_cuts, right_cuts, cov_tf
 
-    @numba.njit(nogil=True, cache=True)
-    def _scan_windows_numba(
-        starts: np.ndarray,
-        ends: np.ndarray,
-        win_starts: np.ndarray,
-        win_ends: np.ndarray,
-        min_len: int,
-        max_len: int,
-        len_bin: int,
-        tf_min_len: int,
-        tf_max_len: int,
-        flank_both: bool,
-        pseudocount: float,
-        min_pillar_score: float,
-        min_len_bins: int,
-        min_pillar_prominence: float,
-        min_protection_score: float,
-        min_motif_prominence: float,
-        min_motif_distance: int,
-    ):
-        n_wins = len(win_starts)
-        n_bins = max(1, (max_len - min_len) // len_bin)
-        max_eff = min_len + n_bins * len_bin
-
-        max_out = n_wins * 35 + 128
-        out_center = np.empty(max_out, dtype=np.int64)
-        out_start = np.empty(max_out, dtype=np.int64)
-        out_end = np.empty(max_out, dtype=np.int64)
-        out_prot = np.empty(max_out, dtype=np.float32)
-        out_raw_prot = np.empty(max_out, dtype=np.float32)
-        out_core_ps = np.empty(max_out, dtype=np.float32)
-        out_flank_l = np.empty(max_out, dtype=np.float32)
-        out_flank_r = np.empty(max_out, dtype=np.float32)
-        out_cov = np.empty(max_out, dtype=np.float32)
-        n_out = 0
-
-        max_pil = n_wins * 60 + 128
-        pil_pos = np.empty(max_pil, dtype=np.int64)
-        pil_score = np.empty(max_pil, dtype=np.float32)
-        pil_nbins = np.empty(max_pil, dtype=np.int32)
-        pil_lcuts = np.empty(max_pil, dtype=np.float32)
-        pil_rcuts = np.empty(max_pil, dtype=np.float32)
-        pil_cov = np.empty(max_pil, dtype=np.float32)
-        n_pil = 0
-
-        lookback = max(max_len, tf_max_len, 500)
-
-        for w_i in range(n_wins):
-            L = int(win_starts[w_i])
-            R = int(win_ends[w_i])
-            W = R - L
-            if W <= 40:
-                continue
-
-            cut_mat = np.zeros((n_bins, W), dtype=np.float32)
-            l_cuts = np.zeros(W, dtype=np.float32)
-            r_cuts = np.zeros(W, dtype=np.float32)
-            cov_diff = np.zeros(W + 1, dtype=np.float32)
-
-            i0 = np.searchsorted(starts, L - lookback)
-            i1 = np.searchsorted(starts, R)
-            for i in range(i0, i1):
-                s = int(starts[i])
-                e = int(ends[i])
-                if e <= L or s >= R:
-                    continue
-                fl = e - s
-                if fl >= tf_min_len and fl <= tf_max_len:
-                    cs = s - L if s > L else 0
-                    ce = e - L if e < R else W
-                    if ce > cs:
-                        cov_diff[cs] += 1.0
-                        cov_diff[ce] -= 1.0
-                if fl >= min_len and fl < max_eff:
-                    b = (fl - min_len) // len_bin
-                    if s >= L and s < R:
-                        cut_mat[b, s - L] += 1.0
-                        l_cuts[s - L] += 1.0
-                    if e >= L and e < R:
-                        cut_mat[b, e - L] += 1.0
-                        r_cuts[e - L] += 1.0
-
-            cov_tf = np.zeros(W, dtype=np.float32)
-            acc = 0.0
-            win_cov_max = 0.0
-            for j in range(W):
-                acc += cov_diff[j]
-                cov_tf[j] = acc
-                if acc > win_cov_max:
-                    win_cov_max = acc
-
-            ps = np.zeros(W, dtype=np.float32)
-            nb = np.zeros(W, dtype=np.int32)
-            for b in range(n_bins):
-                row = cut_mat[b]
-                for j in range(W):
-                    jl = j - 1 if j > 0 else 0
-                    jr = j + 1 if j + 1 < W else W - 1
-                    c3 = row[jl] + row[j] + row[jr]
-                    if j == 0 or j == W - 1:
-                        c3 = row[j] * 1.5
-                    if c3 >= 1.0:
-                        nb[j] += 1
-                    ps[j] += np.log2(1.0 + c3)
-
-            for j in range(3, W - 3):
-                val_p = ps[j]
-                if val_p >= min_pillar_score and nb[j] >= min_len_bins:
-                    is_max = True
-                    for k in range(j - 2, j + 3):
-                        if ps[k] > val_p or (ps[k] == val_p and k < j):
-                            is_max = False
-                            break
-                    if is_max and n_pil < max_pil:
-                        l_min_p = val_p
-                        for k in range(max(0, j - 12), j):
-                            if ps[k] < l_min_p:
-                                l_min_p = ps[k]
-                        r_min_p = val_p
-                        for k in range(j + 1, min(W, j + 13)):
-                            if ps[k] < r_min_p:
-                                r_min_p = ps[k]
-                        if val_p - max(l_min_p, r_min_p) >= min_pillar_prominence:
-                            pil_pos[n_pil] = L + j
-                            pil_score[n_pil] = val_p
-                            pil_nbins[n_pil] = nb[j]
-                            pil_lcuts[n_pil] = l_cuts[j - 1] + l_cuts[j] + l_cuts[j + 1]
-                            pil_rcuts[n_pil] = r_cuts[j - 1] + r_cuts[j] + r_cuts[j + 1]
-                            pil_cov[n_pil] = cov_tf[j]
-                            n_pil += 1
-
-            ps_cum = np.zeros(W + 1, dtype=np.float64)
-            for j in range(W):
-                ps_cum[j + 1] = ps_cum[j] + ps[j]
-
-            prot = np.zeros(W, dtype=np.float32)
-            raw_prot = np.zeros(W, dtype=np.float32)
-            best_w = np.full(W, 14, dtype=np.int32)
-            k_cov = 0.15 * win_cov_max + 30.0
-
-            for j in range(15, W - 15):
-                cov_w = cov_tf[j] / (cov_tf[j] + k_cov)
-
-                best_sc = -1e9
-                best_raw = -1e9
-                bw = 14
-                for width in (10, 12, 14, 16, 18, 20, 22, 24):
-                    half_l = width // 2
-                    half_r = width - half_l
-                    in_l = half_l - 2 if half_l > 3 else 1
-                    in_r = half_r - 2 if half_r > 3 else 1
-                    c_lo = j - in_l
-                    c_hi = j + in_r + 1
-                    c_mean = (ps_cum[c_hi] - ps_cum[c_lo]) / float(c_hi - c_lo)
-                    c_max = 0.0
-                    for k in range(c_lo, c_hi):
-                        if ps[k] > c_max:
-                            c_max = ps[k]
-                    c_eff = 0.5 * c_mean + 0.5 * c_max
-
-                    fl_l = 0.0
-                    for k in range(max(0, j - half_l - 2), min(W, j - half_l + 3)):
-                        if ps[k] > fl_l:
-                            fl_l = ps[k]
-                    fl_r = 0.0
-                    for k in range(max(0, j + half_r - 2), min(W, j + half_r + 3)):
-                        if ps[k] > fl_r:
-                            fl_r = ps[k]
-
-                    f_min = fl_l if fl_l < fl_r else fl_r
-                    f_max = fl_r if fl_l < fl_r else fl_l
-                    if flank_both:
-                        f_paired = (f_min ** 0.65) * (f_max ** 0.35)
-                    else:
-                        f_paired = 0.65 * f_max + 0.35 * f_min
-                    r_sc = np.log2((f_paired + pseudocount) / (c_eff + pseudocount))
-                    w_sc = r_sc * cov_w
-                    if w_sc > best_sc:
-                        best_sc = w_sc
-                        best_raw = r_sc
-                        bw = width
-                prot[j] = best_sc
-                raw_prot[j] = best_raw
-                best_w[j] = bw
-
-            half_dist = max(1, min_motif_distance - 1)
-            j = 15
-            while j < W - 15:
-                val = prot[j]
-                if val >= min_protection_score:
-                    is_peak = True
-                    for k in range(max(15, j - half_dist), min(W - 15, j + half_dist + 1)):
-                        if prot[k] > val or (prot[k] == val and k < j):
-                            is_peak = False
-                            break
-                    if is_peak:
-                        l_min = val
-                        for k in range(max(0, j - 12), j):
-                            if prot[k] < l_min:
-                                l_min = prot[k]
-                        r_min = val
-                        for k in range(j + 1, min(W, j + 13)):
-                            if prot[k] < r_min:
-                                r_min = prot[k]
-                        prom = val - max(l_min, r_min)
-                        if prom >= min_motif_prominence and n_out < max_out:
-                            w = best_w[j]
-                            hl = w // 2
-                            hr = w - hl
-                            l_p = j - hl
-                            l_best = -1.0
-                            for k in range(max(0, j - hl - 3), max(1, j - 2)):
-                                if ps[k] > l_best:
-                                    l_best = ps[k]
-                                    l_p = k
-                            r_p = j + hr
-                            r_best = -1.0
-                            for k in range(min(W - 1, j + 3), min(W, j + hr + 4)):
-                                if ps[k] > r_best:
-                                    r_best = ps[k]
-                                    r_p = k
-                            ms = L + l_p + 1
-                            me = L + r_p
-                            if me <= ms + 4:
-                                ms = L + j - hl
-                                me = L + j + hr
-                            out_center[n_out] = L + j
-                            out_start[n_out] = ms
-                            out_end[n_out] = me
-                            out_prot[n_out] = val
-                            out_raw_prot[n_out] = raw_prot[j]
-                            out_core_ps[n_out] = ps[j]
-                            out_flank_l[n_out] = l_best
-                            out_flank_r[n_out] = r_best
-                            out_cov[n_out] = cov_tf[j]
-                            n_out += 1
-                j += 1
-
-        return (
-            out_center[:n_out],
-            out_start[:n_out],
-            out_end[:n_out],
-            out_prot[:n_out],
-            out_raw_prot[:n_out],
-            out_core_ps[:n_out],
-            out_flank_l[:n_out],
-            out_flank_r[:n_out],
-            out_cov[:n_out],
-            pil_pos[:n_pil],
-            pil_score[:n_pil],
-            pil_nbins[:n_pil],
-            pil_lcuts[:n_pil],
-            pil_rcuts[:n_pil],
-            pil_cov[:n_pil],
-        )
-
 
 def _accumulate_region(
     starts: np.ndarray,
@@ -469,28 +225,29 @@ def _find_peaks_1d(
     min_prominence: float = 0.0,
     prom_window: int = 12,
 ) -> np.ndarray:
-    """Pure-NumPy 1D local peak finder with height, distance, and local prominence filtering."""
+    """Vectorized 1D local peak finder with height, distance, and local prominence filtering."""
     n = len(y)
     if n < 3:
         return np.empty(0, dtype=np.int64)
-    candidates = []
-    for i in range(1, n - 1):
-        val = float(y[i])
-        if val < min_height:
-            continue
-        if val > y[i - 1] and val >= y[i + 1]:
-            if min_prominence > 0.0:
-                l_lo = max(0, i - prom_window)
-                r_hi = min(n, i + prom_window + 1)
-                l_min = float(np.min(y[l_lo:i])) if i > l_lo else val
-                r_min = float(np.min(y[i + 1 : r_hi])) if r_hi > i + 1 else val
-                if val - max(l_min, r_min) < min_prominence:
-                    continue
-            candidates.append(i)
-    if not candidates:
+    mid = y[1:-1]
+    mask = (mid >= min_height) & (mid > y[:-2]) & (mid >= y[2:])
+    cand_arr = np.flatnonzero(mask).astype(np.int64) + 1
+    if len(cand_arr) == 0:
         return np.empty(0, dtype=np.int64)
 
-    cand_arr = np.array(candidates, dtype=np.int64)
+    if min_prominence > 0.0:
+        w = max(1, int(prom_window))
+        pad = np.pad(y.astype(np.float64), (w, w), mode="constant", constant_values=np.inf)
+        strides = (pad.strides[0], pad.strides[0])
+        left_view = np.lib.stride_tricks.as_strided(pad[: n + w], shape=(n, w), strides=strides)
+        right_view = np.lib.stride_tricks.as_strided(pad[w + 1 :], shape=(n, w), strides=strides)
+        l_min = left_view[cand_arr].min(axis=1)
+        r_min = right_view[cand_arr].min(axis=1)
+        prom = y[cand_arr] - np.maximum(l_min, r_min)
+        cand_arr = cand_arr[prom >= min_prominence]
+        if len(cand_arr) == 0:
+            return np.empty(0, dtype=np.int64)
+
     if min_distance <= 1 or len(cand_arr) <= 1:
         return cand_arr
 
@@ -506,16 +263,250 @@ def _find_peaks_1d(
     return np.sort(np.array(kept, dtype=np.int64))
 
 
+def _compute_cov_weight(cov_tf: np.ndarray) -> np.ndarray:
+    """Smooth local coverage weighting in [0, 1] using a 301-bp local peak envelope."""
+    if len(cov_tf) == 0:
+        return np.empty(0, dtype=np.float64)
+    cov_f64 = cov_tf.astype(np.float64)
+    local_cov_max = _max_filter_1d(cov_f64, 301)
+    return cov_f64 / (cov_f64 + 0.10 * local_cov_max + 10.0)
+
+
+def _call_intervals_from_arrays(
+    *,
+    chrom: str,
+    L: int,
+    W: int,
+    pillar_score: np.ndarray,
+    n_len_bins: np.ndarray,
+    left_cuts: np.ndarray,
+    right_cuts: np.ndarray,
+    cov_tf: np.ndarray,
+    cov_weight: np.ndarray | None = None,
+    motif_width_range: tuple[int, int] = (10, 24),
+    flank_mode: str = "both",
+    pseudocount: float = 2.0,
+    pillar_window: int = 3,
+    min_pillar_score: float = 8.0,
+    min_len_bins: int = 4,
+    min_pillar_prominence: float = 2.0,
+    min_pillar_distance: int = 5,
+    min_protection_score: float = 0.75,
+    min_motif_prominence: float = 0.20,
+    min_motif_distance: int = 12,
+    expected_cuts: np.ndarray | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Call discrete cut pillars first, then call candidate motifs as pairs ``(l, r)``
+    of called pillars with ``r - l`` in ``motif_width_range`` scored by core depletion
+    between them. Interval is ``[l, r)`` by construction.
+    """
+    p_peaks = _find_peaks_1d(
+        pillar_score,
+        min_height=min_pillar_score,
+        min_distance=max(1, int(min_pillar_distance)),
+        min_prominence=min_pillar_prominence,
+    )
+    if len(p_peaks) > 0:
+        p_peaks = p_peaks[n_len_bins[p_peaks] >= min_len_bins]
+
+    half_pw = max(1, int(pillar_window) // 2)
+    p_rows = []
+    for p in p_peaks:
+        w_lo = max(0, int(p) - half_pw)
+        w_hi = min(W, int(p) + half_pw + 1)
+        l_sum = float(left_cuts[w_lo:w_hi].sum())
+        r_sum = float(right_cuts[w_lo:w_hi].sum())
+        tot = l_sum + r_sum
+        l_frac = l_sum / tot if tot > 0 else 0.5
+        p_rows.append(
+            {
+                "chrom": chrom,
+                "start": int(L + p - half_pw),
+                "end": int(L + p + half_pw + 1),
+                "pos": int(L + p),
+                "name": f"pillar_{chrom}_{L + p}",
+                "score": float(pillar_score[p]),
+                "strand": "+" if l_frac >= 0.5 else "-",
+                "pillar_score": float(pillar_score[p]),
+                "n_len_bins": int(n_len_bins[p]),
+                "cuts": tot,
+                "left_cuts": l_sum,
+                "right_cuts": r_sum,
+                "left_frac": l_frac,
+                "tf_coverage": float(cov_tf[p]),
+            }
+        )
+    if p_rows:
+        pillars_df = pd.DataFrame(p_rows)
+    else:
+        pillars_df = pd.DataFrame(
+            columns=[
+                "chrom",
+                "start",
+                "end",
+                "pos",
+                "name",
+                "score",
+                "strand",
+                "pillar_score",
+                "n_len_bins",
+                "cuts",
+                "left_cuts",
+                "right_cuts",
+                "left_frac",
+                "tf_coverage",
+            ]
+        )
+
+    # Pair-based motif calling: score every pair (l_p, r_p) of called pillars with
+    # width = r_p - l_p in motif_width_range (with 1-bp jitter tolerance on each boundary).
+    if cov_weight is None:
+        cov_weight = _compute_cov_weight(cov_tf)
+
+    # Optional sequence-expected cleavage normalization hook (e.g. from KmerBiasTable)
+    eff_ps = pillar_score
+    if expected_cuts is not None and len(expected_cuts) == W:
+        exp_arr = np.maximum(0.1, np.asarray(expected_cuts, dtype=np.float64))
+        eff_ps = pillar_score / (exp_arr / float(np.mean(exp_arr)))
+
+    ps_pad = np.concatenate([[0.0], np.cumsum(eff_ps)])
+    min_w = max(4, int(motif_width_range[0]) - 2)
+    max_w = int(motif_width_range[1]) + 2
+    pc = float(pseudocount)
+    edge_trim = max(3, half_pw + 1)
+
+    n_p = len(p_peaks)
+    candidates = []
+    for i in range(n_p):
+        lp = int(p_peaks[i])
+        fl_l = float(eff_ps[lp])
+        for j in range(i + 1, n_p):
+            rp = int(p_peaks[j])
+            w = rp - lp
+            if w < min_w:
+                continue
+            if w > max_w:
+                break
+            fl_r = float(eff_ps[rp])
+
+            # Core interior strictly inside the two pillars (excluding pillar_window spillover)
+            c_lo = min(rp - 1, lp + edge_trim)
+            c_hi = max(c_lo + 1, rp - edge_trim + 1)
+            c_mean = float(ps_pad[c_hi] - ps_pad[c_lo]) / float(c_hi - c_lo)
+            c_max = float(np.max(eff_ps[c_lo:c_hi]))
+            c_eff = 0.5 * c_mean + 0.5 * c_max
+
+            # Both pillar boundaries must exceed the core interior
+            if fl_l <= c_mean + 1.0 or fl_r <= c_mean + 1.0:
+                continue
+
+            f_min = min(fl_l, fl_r)
+            f_max = max(fl_l, fl_r)
+            if flank_mode == "both":
+                f_paired = (max(0.0, f_min) ** 0.65) * (max(0.0, f_max) ** 0.35)
+            else:
+                # One called pillar + minimum signal on the other called pillar
+                f_paired = (max(0.0, f_min) ** 0.45) * (max(0.0, f_max) ** 0.55)
+
+            raw_prot = float(np.log2((f_paired + pc) / (c_eff + pc)))
+            if raw_prot < min_motif_prominence:
+                continue
+
+            mid = (lp + rp) // 2
+            prot = raw_prot * float(cov_weight[mid])
+            if prot >= min_protection_score:
+                cv = float(cov_tf[mid])
+                comp = prot * float(np.log2(1.0 + 0.5 * (fl_l + fl_r))) * float(np.log2(1.0 + cv))
+                candidates.append(
+                    (
+                        lp,
+                        rp,
+                        mid,
+                        w,
+                        prot,
+                        raw_prot,
+                        float(pillar_score[mid]),
+                        float(pillar_score[lp]),
+                        float(pillar_score[rp]),
+                        cv,
+                        comp,
+                    )
+                )
+
+    # Non-maximum suppression: keep highest-scoring pair among overlapping intervals [lp, rp)
+    # or centers closer than min_motif_distance
+    candidates.sort(key=lambda x: (-x[4], x[0]))
+    kept = []
+    min_dist = max(1, int(min_motif_distance))
+    for cand in candidates:
+        lp, rp, mid = cand[0], cand[1], cand[2]
+        if any((lp < kr and rp > kl) or abs(mid - km) < min_dist for kl, kr, km, *_ in kept):
+            continue
+        kept.append(cand)
+    kept.sort(key=lambda x: x[0])
+
+    m_rows = []
+    for lp, rp, mid, w, prot, raw_prot, core_ps, fl_l, fl_r, cv, comp in kept:
+        m_start = int(L + lp)
+        m_end = int(L + rp)
+        m_center = int(L + mid)
+        m_rows.append(
+            {
+                "chrom": chrom,
+                "start": m_start,
+                "end": m_end,
+                "center": m_center,
+                "width": int(w),
+                "name": f"motif_{chrom}_{m_center}",
+                "score": prot,
+                "strand": ".",
+                "protection_score": prot,
+                "raw_log2_protection": raw_prot,
+                "core_pillar_score": core_ps,
+                "left_pillar_score": fl_l,
+                "right_pillar_score": fl_r,
+                "tf_coverage": cv,
+                "composite_score": comp,
+            }
+        )
+
+    if m_rows:
+        motifs_df = pd.DataFrame(m_rows)
+    else:
+        motifs_df = pd.DataFrame(
+            columns=[
+                "chrom",
+                "start",
+                "end",
+                "center",
+                "width",
+                "name",
+                "score",
+                "strand",
+                "protection_score",
+                "raw_log2_protection",
+                "core_pillar_score",
+                "left_pillar_score",
+                "right_pillar_score",
+                "tf_coverage",
+                "composite_score",
+            ]
+        )
+    return pillars_df, motifs_df
+
+
 # ---------------------------------------------------------------------------
 # LocusPillarScan dataclass
 # ---------------------------------------------------------------------------
 
 @dataclass(repr=False)
 class LocusPillarScan:
-    """Continuous 1D/2D cleavage-pillar & footprint-protection profiles and thresholded calls for one locus.
+    """Continuous 1D/2D cleavage-pillar & footprint-protection profiles and pair-called intervals for one locus.
 
     All interval and track outputs use ``chrom, start, end`` coordinates (0-based, half-open)
     for direct compatibility with ``pygenomic_tracks``, bedGraph/BED export, and ``moodspy``.
+    Called motifs correspond to intervals ``[l, r)`` between pairs of called cut pillars at
+    genomic boundaries ``l`` and ``r``.
     """
 
     chrom: str
@@ -556,18 +547,19 @@ class LocusPillarScan:
         min_len_bins: int | None = None,
         min_pillar_prominence: float | None = None,
         min_pillar_distance: int = 5,
+        expected_cuts: np.ndarray | None = None,
     ) -> LocusPillarScan:
-        """Re-call discrete ``.motifs`` and ``.pillars`` intervals with new thresholds
+        """Re-call discrete ``.pillars`` and pair-based ``.motifs`` intervals with new thresholds
         without re-scanning the underlying fragments.
 
         Parameters
         ----------
         min_protection_score:
-            Minimum positive ``protection_score`` height to call a candidate motif
+            Minimum pair protection score to call a candidate motif ``[l, r)``
             (defaults to the value used when creating this scan, ``0.75``).
         min_motif_prominence:
-            Minimum local prominence of a protection peak (default ``0.20``). Lower values
-            split closely spaced tandem motifs more aggressively.
+            Minimum unweighted ``log2((flank + pc) / (core + pc))`` depletion required
+            between a pair of flanking pillars (default ``0.20``).
         min_motif_distance:
             Minimum center-to-center distance (bp) between called motifs (default ``12``).
         min_pillar_score:
@@ -578,6 +570,10 @@ class LocusPillarScan:
             Minimum local prominence of a cut-pillar peak (default ``2.0``).
         min_pillar_distance:
             Minimum distance (bp) between called cut pillars (default ``5``).
+        expected_cuts:
+            Optional 1-bp relative sequence-expected cleavage rate array of length ``end - start``
+            (e.g. from [`KmerBiasTable`][pyvplot.KmerBiasTable]) used to normalize ``pillar_score``
+            against local sequence cleavage preference before scoring core depletion.
 
         Returns
         -------
@@ -585,8 +581,6 @@ class LocusPillarScan:
             A new ``LocusPillarScan`` sharing the same continuous 1D/2D arrays with
             updated ``.motifs``, ``.pillars``, and threshold metadata.
         """
-        from dataclasses import replace
-
         mp_score = float(
             self.metadata.get("min_protection_score", 0.75)
             if min_protection_score is None
@@ -618,6 +612,9 @@ class LocusPillarScan:
             else min_pillar_prominence
         )
         pillar_window = int(self.metadata.get("pillar_window", 3))
+        motif_width_range = tuple(self.metadata.get("motif_width_range", (10, 24)))
+        flank_mode = str(self.metadata.get("flank_mode", "both"))
+        pseudocount = float(self.metadata.get("pseudocount", 2.0))
 
         pillars_df, motifs_df = _call_intervals_from_arrays(
             chrom=self.chrom,
@@ -628,9 +625,9 @@ class LocusPillarScan:
             left_cuts=self.left_cuts,
             right_cuts=self.right_cuts,
             cov_tf=self.tf_coverage,
-            prot_1d=self.protection_score,
-            prot_1d_raw=self.raw_log2_protection,
-            best_widths=self.best_widths,
+            motif_width_range=motif_width_range,
+            flank_mode=flank_mode,
+            pseudocount=pseudocount,
             pillar_window=pillar_window,
             min_pillar_score=pp_score,
             min_len_bins=pp_bins,
@@ -639,6 +636,7 @@ class LocusPillarScan:
             min_protection_score=mp_score,
             min_motif_prominence=mp_prom,
             min_motif_distance=mp_dist,
+            expected_cuts=expected_cuts,
         )
         new_meta = dict(self.metadata)
         new_meta.update(
@@ -743,40 +741,6 @@ class LocusPillarScan:
     ) -> tuple[Any, Any]:
         """Plot into a single existing ``ax`` (for ``pygenomic_tracks`` / multi-track figures)
         or create a standalone multi-panel QC figure when ``ax is None``.
-
-        Parameters
-        ----------
-        ax:
-            Optional matplotlib ``Axes``. When provided, draws a single track directly
-            onto ``ax`` (controlled by ``what``, ``show_motifs``, and ``show_pillars``)
-            and returns ``(ax.figure, ax)``—just like ``LocusVPlot.plot(ax=ax)``.
-            When ``None`` (default), creates a standalone multi-panel QC figure.
-        what:
-            Used when ``ax`` is provided:
-            - ``"protection"`` (default): 1-bp continuous ``protection_score`` profile
-              with called motif intervals shaded.
-            - ``"pillars"``: 1-bp multi-length ``pillar_score`` profile with called cut
-              pillars marked.
-            - ``"both"``: overlays ``pillar_score`` and ``protection_score`` (twin y-axis)
-              with both called pillars and motif intervals.
-        show_motifs:
-            When ``ax`` is provided, whether to shade called motif ``[start, end)`` spans.
-        show_pillars:
-            When ``ax`` is provided, whether to mark called cut-pillar positions.
-        store:
-            Optional [`FragmentStore`][pyvplot.FragmentStore] for ``mode="tracks"`` when ``ax is None``.
-        hits:
-            Optional reference BED DataFrame (``chrom, start, end``) to overlay for validation.
-        mode:
-            When ``ax is None``: ``"tracks"`` (default) or ``"multiscale"``.
-        show_raw_protection:
-            Whether to overlay the dotted unweighted ``raw_log2_protection`` curve.
-        figsize:
-            Matplotlib figure size when ``ax is None``.
-
-        Returns
-        -------
-        (fig, ax) or (fig, axes)
         """
         import matplotlib.pyplot as plt
         from matplotlib.gridspec import GridSpec
@@ -861,8 +825,6 @@ class LocusPillarScan:
                 & (hits["start"] < R)
             ]
 
-        src_store = store if store is not None else self.metadata.get("_store")
-
         if mode == "tracks":
             fig = plt.figure(figsize=figsize)
             gs = GridSpec(
@@ -879,10 +841,9 @@ class LocusPillarScan:
             ax_pillar = fig.add_subplot(gs[4], sharex=ax_top)
             axes = np.array([ax_top, ax_pstrip, ax_prot, ax_cstrip, ax_pillar], dtype=object)
 
-            # Panel 0: Fragment cleavage scatter (if store available) or length-resolved cut matrix
-            if src_store is not None and not src_store.is_stranded:
+            if store is not None and not store.is_stranded:
                 min_l, max_l = self.metadata.get("len_range", (20, 250))
-                lv = src_store.locus_vplot((self.chrom, L, R), feature="cuts", len_range=(min_l, max_l + 10))
+                lv = store.locus_vplot((self.chrom, L, R), feature="cuts", len_range=(min_l, max_l + 10))
                 pts = lv.points
                 left_pts = pts[pts["end"] == "left"]
                 right_pts = pts[pts["end"] == "right"]
@@ -940,7 +901,6 @@ class LocusPillarScan:
                 loc="left",
             )
 
-            # Panel 1: 1D Continuous Signed Protection Score Heatmap Strip (diverging RdYlGn)
             vmax_p = max(1.0, float(np.max(np.abs(self.protection_score))) if len(self.protection_score) else 1.0)
             ax_pstrip.imshow(
                 self.protection_score[None, :],
@@ -956,7 +916,6 @@ class LocusPillarScan:
             ax_pstrip.set_yticks([])
             ax_pstrip.set_ylabel("Prot.\nheatmap", fontsize=8, rotation=0, ha="right", va="center")
 
-            # Panel 2: Unthresholded Continuous 1-bp Protection Score + Optional Called Intervals
             pos_vals = np.maximum(0.0, self.protection_score)
             neg_vals = np.minimum(0.0, self.protection_score)
             ax_prot.bar(xs, pos_vals, width=1.0, color="#1b4332", edgecolor="none", alpha=0.9, label="Protected trough (+)")
@@ -976,7 +935,6 @@ class LocusPillarScan:
             ax_prot.set_ylabel("Protection\nscore (1-bp)")
             ax_prot.legend(loc="upper right", fontsize=8, ncol=2, framealpha=0.9)
 
-            # Panel 3: 1D Multi-Length Cut Pillar Heatmap Strip
             vmax_c = max(10.0, float(np.percentile(self.pillar_score, 99)) if len(self.pillar_score) else 10.0)
             ax_cstrip.imshow(
                 self.pillar_score[None, :],
@@ -989,7 +947,6 @@ class LocusPillarScan:
             ax_cstrip.set_yticks([])
             ax_cstrip.set_ylabel("Pillar\nheatmap", fontsize=8, rotation=0, ha="right", va="center")
 
-            # Panel 4: Multi-Length Cut Pillar Score + Called Pillars + TF Spanning Coverage
             ax_pillar.fill_between(
                 xs, 0, self.pillar_score, color="#3a86ff", alpha=0.30, label="1-bp Multi-length pillar score"
             )
@@ -1024,7 +981,6 @@ class LocusPillarScan:
             sharex=True,
             gridspec_kw={"height_ratios": [1.3, 1.3, 1.35, 1.1], "hspace": 0.14},
         )
-        # Panel 0: Length-resolved cut matrix
         ax0 = axes[0]
         im0 = ax0.imshow(
             self.log_cut_matrix,
@@ -1047,7 +1003,6 @@ class LocusPillarScan:
         cb0 = fig.colorbar(im0, ax=ax0, pad=0.01, aspect=15)
         cb0.set_label("log2(1+cuts)", fontsize=8)
 
-        # Panel 1: 2D Multi-Scale Protection Score Heatmap
         ax1 = axes[1]
         if len(self.footprint_widths) > 1:
             step = float(self.footprint_widths[1] - self.footprint_widths[0])
@@ -1082,7 +1037,6 @@ class LocusPillarScan:
         cb1 = fig.colorbar(im1, ax=ax1, pad=0.01, aspect=15)
         cb1.set_label("Protection", fontsize=8)
 
-        # Panel 2: Continuous 1-bp Protection Score vs. Thresholded Intervals
         ax2 = axes[2]
         if show_raw_protection:
             ax2.plot(
@@ -1122,7 +1076,6 @@ class LocusPillarScan:
         cb_d1 = fig.colorbar(im1, ax=ax2, pad=0.01, aspect=15)
         cb_d1.ax.set_visible(False)
 
-        # Panel 3: Multi-length Cut Pillar Score + TF coverage
         ax3 = axes[3]
         ax3.fill_between(xs, 0, self.pillar_score, color="#3a86ff", alpha=0.30, label="Multi-length pillar score")
         ax3.plot(xs, self.pillar_score, color="#1d3557", lw=1.2)
@@ -1151,157 +1104,6 @@ class LocusPillarScan:
 # Public API functions
 # ---------------------------------------------------------------------------
 
-def _call_intervals_from_arrays(
-    *,
-    chrom: str,
-    L: int,
-    W: int,
-    pillar_score: np.ndarray,
-    n_len_bins: np.ndarray,
-    left_cuts: np.ndarray,
-    right_cuts: np.ndarray,
-    cov_tf: np.ndarray,
-    prot_1d: np.ndarray,
-    prot_1d_raw: np.ndarray,
-    best_widths: np.ndarray,
-    pillar_window: int,
-    min_pillar_score: float,
-    min_len_bins: int,
-    min_pillar_prominence: float,
-    min_pillar_distance: int,
-    min_protection_score: float,
-    min_motif_prominence: float,
-    min_motif_distance: int,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Call discrete pillar and motif BED DataFrames from continuous 1-bp profiles."""
-    p_peaks = _find_peaks_1d(
-        pillar_score,
-        min_height=min_pillar_score,
-        min_distance=max(1, int(min_pillar_distance)),
-        min_prominence=min_pillar_prominence,
-    )
-    half_pw = max(1, int(pillar_window) // 2)
-    p_rows = []
-    for p in p_peaks:
-        if n_len_bins[p] < min_len_bins:
-            continue
-        w_lo = max(0, int(p) - half_pw)
-        w_hi = min(W, int(p) + half_pw + 1)
-        l_sum = float(left_cuts[w_lo:w_hi].sum())
-        r_sum = float(right_cuts[w_lo:w_hi].sum())
-        tot = l_sum + r_sum
-        l_frac = l_sum / tot if tot > 0 else 0.5
-        p_rows.append(
-            {
-                "chrom": chrom,
-                "start": int(L + p - half_pw),
-                "end": int(L + p + half_pw + 1),
-                "pos": int(L + p),
-                "name": f"pillar_{chrom}_{L + p}",
-                "score": float(pillar_score[p]),
-                "strand": "+" if l_frac >= 0.5 else "-",
-                "pillar_score": float(pillar_score[p]),
-                "n_len_bins": int(n_len_bins[p]),
-                "cuts": tot,
-                "left_cuts": l_sum,
-                "right_cuts": r_sum,
-                "left_frac": l_frac,
-                "tf_coverage": float(cov_tf[p]),
-            }
-        )
-    if p_rows:
-        pillars_df = pd.DataFrame(p_rows)
-    else:
-        pillars_df = pd.DataFrame(
-            columns=[
-                "chrom",
-                "start",
-                "end",
-                "pos",
-                "name",
-                "score",
-                "strand",
-                "pillar_score",
-                "n_len_bins",
-                "cuts",
-                "left_cuts",
-                "right_cuts",
-                "left_frac",
-                "tf_coverage",
-            ]
-        )
-
-    m_peaks = _find_peaks_1d(
-        prot_1d,
-        min_height=min_protection_score,
-        min_distance=max(1, int(min_motif_distance)),
-        min_prominence=min_motif_prominence,
-    )
-    m_rows = []
-    for m in m_peaks:
-        w = int(best_widths[m])
-        half_l = w // 2
-        half_r = w - half_l
-        l_lo = max(0, int(m) - half_l - 3)
-        l_hi = max(l_lo + 1, int(m) - 2)
-        r_lo = min(W - 1, int(m) + 3)
-        r_hi = min(W, int(m) + half_r + 4)
-        l_p = l_lo + int(np.argmax(pillar_score[l_lo:l_hi]))
-        r_p = r_lo + int(np.argmax(pillar_score[r_lo:r_hi]))
-        m_start = int(L + l_p + 1)
-        m_end = int(L + r_p)
-        if m_end <= m_start + 4:
-            m_start = int(L + m - half_l)
-            m_end = int(L + m + half_r)
-        fl_l = float(pillar_score[l_p])
-        fl_r = float(pillar_score[r_p])
-        cv = float(cov_tf[m])
-        pr = float(prot_1d[m])
-        comp = pr * float(np.log2(1.0 + 0.5 * (fl_l + fl_r))) * float(np.log2(1.0 + cv))
-        m_rows.append(
-            {
-                "chrom": chrom,
-                "start": m_start,
-                "end": m_end,
-                "center": int(L + m),
-                "width": int(m_end - m_start),
-                "name": f"motif_{chrom}_{L + m}",
-                "score": pr,
-                "strand": ".",
-                "protection_score": pr,
-                "raw_log2_protection": float(prot_1d_raw[m]),
-                "core_pillar_score": float(pillar_score[m]),
-                "left_pillar_score": fl_l,
-                "right_pillar_score": fl_r,
-                "tf_coverage": cv,
-                "composite_score": comp,
-            }
-        )
-    if m_rows:
-        motifs_df = pd.DataFrame(m_rows)
-    else:
-        motifs_df = pd.DataFrame(
-            columns=[
-                "chrom",
-                "start",
-                "end",
-                "center",
-                "width",
-                "name",
-                "score",
-                "strand",
-                "protection_score",
-                "raw_log2_protection",
-                "core_pillar_score",
-                "left_pillar_score",
-                "right_pillar_score",
-                "tf_coverage",
-                "composite_score",
-            ]
-        )
-    return pillars_df, motifs_df
-
-
 def scan_locus_pillars(
     store: FragmentStore,
     region: Any,
@@ -1321,9 +1123,15 @@ def scan_locus_pillars(
     min_protection_score: float = 0.75,
     min_motif_prominence: float = 0.20,
     min_motif_distance: int = 12,
+    expected_cuts: np.ndarray | None = None,
 ) -> LocusPillarScan:
     """Compute continuous 1D/2D cleavage-pillar and footprint-protection profiles and call
-    cut pillars and candidate protected motifs in a genomic window.
+    cut pillars and pair-bracketed protected motifs ``[l, r)`` in a genomic window.
+
+    Note: for assays with sequence-dependent endonuclease bias (e.g. MNase prefers AT-rich
+    DNA so a GC-rich core between AT-rich flanks can appear protected), pass per-base
+    ``expected_cuts`` (from [`KmerBiasTable`][pyvplot.KmerBiasTable]) or calibrate
+    ``min_protection_score`` against a free-MNase / naked-DNA control store.
     """
     if store.is_stranded:
         raise ValueError("scan_locus_pillars requires paired-end fragment intervals; store is stranded.")
@@ -1367,12 +1175,7 @@ def scan_locus_pillars(
     pillar_score = log_mat.sum(axis=0)
     n_len_bins = (win_mat >= 1.0).sum(axis=0).astype(np.int32)
 
-    # Smooth unthresholded coverage weight: Michaelis-Menten saturation cov / (cov + K_cov)
-    # so every base pair has a truly continuous value (no hard boolean zeroing), while empty
-    # background desert is smoothly damped.
-    locus_cov_max = float(np.max(cov_tf)) if W > 0 else 0.0
-    k_cov = 0.15 * locus_cov_max + 30.0
-    cov_weight = cov_tf.astype(np.float64) / (cov_tf.astype(np.float64) + k_cov)
+    cov_weight = _compute_cov_weight(cov_tf)
 
     prot_2d_scale = np.zeros((len(widths), W), dtype=np.float64)
     prot_2d_raw = np.zeros((len(widths), W), dtype=np.float64)
@@ -1405,7 +1208,6 @@ def scan_locus_pillars(
         else:
             flank_paired = 0.65 * f_max + 0.35 * f_min
 
-        # Truly continuous signed log2 ratio (positive inside protected troughs, negative on cut pillars)
         raw_log2 = np.log2((flank_paired + pc) / (core_eff + pc))
         prot_2d_raw[idx_w] = raw_log2
         prot_2d_scale[idx_w] = raw_log2 * cov_weight
@@ -1421,8 +1223,6 @@ def scan_locus_pillars(
         best_w_idx = np.argmax(sub_scale, axis=0)
         max_scale = sub_scale[best_w_idx, np.arange(W)]
         mean_scale = sub_scale.mean(axis=0)
-        # Where any candidate width has positive protection, take the best width's positive score;
-        # where all widths are negative (on a cut pillar), take the mean negative dip across widths.
         prot_1d = np.where(max_scale > 0.0, max_scale, mean_scale)
         prot_1d_raw = np.where(max_scale > 0.0, sub_raw[best_w_idx, np.arange(W)], sub_raw.mean(axis=0))
         best_widths = sub_widths[best_w_idx]
@@ -1440,9 +1240,10 @@ def scan_locus_pillars(
         left_cuts=left_cuts,
         right_cuts=right_cuts,
         cov_tf=cov_tf,
-        prot_1d=prot_1d,
-        prot_1d_raw=prot_1d_raw,
-        best_widths=best_widths,
+        cov_weight=cov_weight,
+        motif_width_range=tuple(motif_width_range),
+        flank_mode=flank_mode,
+        pseudocount=pc,
         pillar_window=int(pillar_window),
         min_pillar_score=float(min_pillar_score),
         min_len_bins=int(min_len_bins),
@@ -1451,6 +1252,7 @@ def scan_locus_pillars(
         min_protection_score=float(min_protection_score),
         min_motif_prominence=float(min_motif_prominence),
         min_motif_distance=int(min_motif_distance),
+        expected_cuts=expected_cuts,
     )
 
     n_bins = cut_mat.shape[0]
@@ -1481,14 +1283,16 @@ def scan_locus_pillars(
             "len_bin": int(len_bin),
             "tf_len_range": tuple(tf_len_range),
             "pillar_window": int(pillar_window),
+            "motif_width_range": tuple(motif_width_range),
+            "flank_pad": int(flank_pad),
             "flank_mode": flank_mode,
+            "pseudocount": pc,
             "min_pillar_score": float(min_pillar_score),
             "min_len_bins": int(min_len_bins),
             "min_pillar_prominence": float(min_pillar_prominence),
             "min_protection_score": float(min_protection_score),
             "min_motif_prominence": float(min_motif_prominence),
             "min_motif_distance": int(min_motif_distance),
-            "_store": store,
         },
     )
 
@@ -1526,7 +1330,7 @@ def find_active_windows(
     merged: list[tuple[int, int]] = []
     cur_s = max(0, int(win_starts[0]))
     cur_e = int(win_ends[0])
-    for ws, we in zip(win_starts[1:], win_ends[1:]):
+    for ws, we in zip(win_starts[1:], win_ends[1:], strict=True):
         if ws <= cur_e + merge_gap:
             cur_e = max(cur_e, int(we))
         else:
@@ -1544,6 +1348,10 @@ def scan_genome_pillars(
     len_range: tuple[int, int] = (20, 250),
     len_bin: int = 10,
     tf_len_range: tuple[int, int] = (20, 120),
+    pillar_window: int = 3,
+    footprint_widths: Sequence[int] | np.ndarray | None = None,
+    motif_width_range: tuple[int, int] = (10, 24),
+    flank_pad: int = 2,
     min_bin_frags: int = 12,
     flank_mode: str = "both",
     pseudocount: float = 2.0,
@@ -1556,40 +1364,25 @@ def scan_genome_pillars(
     return_pillars: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """Scan active regions across the whole genome (or selected chromosomes) for de-novo
-    protected motif footprints and multi-length cut pillars.
+    protected motif footprints ``[l, r)`` and multi-length cut pillars.
 
-    Parameters
-    ----------
-    store:
-        An unstranded [`FragmentStore`][pyvplot.FragmentStore].
-    chroms:
-        Optional subset of chromosomes to scan (default: all chromosomes in ``store``).
-    len_range, len_bin, tf_len_range:
-        Fragment-length parameters for multi-length cleavage pillars and TF coverage.
-    min_bin_frags:
-        Minimum short-fragment midpoints per 50-bp bin to seed an active window (default ``12``).
-    flank_mode:
-        ``"both"`` (default, requires cut pillars on both sides of the motif) or
-        ``"either"`` (allows strongly asymmetric / one-sided flanking pillars).
-    pseudocount:
-        Pseudocount in ``log2((flank + pc) / (core + pc))`` (default ``2.0``).
-    min_pillar_score, min_len_bins, min_pillar_prominence:
-        Thresholds for calling discrete multi-length cleavage pillars.
-    min_protection_score, min_motif_prominence, min_motif_distance:
-        Thresholds for calling de-novo protected motif footprints.
-    return_pillars:
-        If ``False`` (default), return ``motifs_df`` sorted by ``composite_score`` descending.
-        If ``True``, return ``(motifs_df, pillars_df)``.
-
-    Returns
-    -------
-    pandas.DataFrame or (pandas.DataFrame, pandas.DataFrame)
-        ``chrom, start, end, ...`` DataFrame(s) ready for ``pygenomic_tracks`` or ``moodspy``.
+    Uses ``find_active_windows`` followed by the same per-window profile accumulation
+    (accelerated by Numba when installed) and shared pair-based calling as
+    [`scan_locus_pillars`][pyvplot.scan_locus_pillars], so Numba and pure-Python backends
+    produce identical intervals without fixed-size buffer truncation.
     """
     if store.is_stranded:
         raise ValueError("scan_genome_pillars requires paired-end fragment intervals; store is stranded.")
     if flank_mode not in {"both", "either"}:
         raise ValueError(f"flank_mode must be 'both' or 'either', got {flank_mode!r}.")
+    min_len, max_len = int(len_range[0]), int(len_range[1])
+    if max_len <= min_len or len_bin <= 0:
+        raise ValueError("`len_range` must have max_len > min_len and `len_bin` > 0.")
+
+    if footprint_widths is not None:
+        widths = np.asarray(list(footprint_widths), dtype=np.int32)
+        if len(widths) == 0 or np.any(widths < 4):
+            raise ValueError("`footprint_widths` must contain integers >= 4.")
 
     target_chroms = list(store.chroms) if chroms is None else [c for c in store.chroms if c in set(chroms)]
     motif_frames: list[pd.DataFrame] = []
@@ -1607,115 +1400,51 @@ def scan_genome_pillars(
         if not wins:
             continue
 
-        if HAS_NUMBA:
-            ws = np.array([w[0] for w in wins], dtype=np.int64)
-            we = np.array([w[1] for w in wins], dtype=np.int64)
-            (
-                c_arr,
-                st_arr,
-                en_arr,
-                pr_arr,
-                rpr_arr,
-                cps_arr,
-                fl_arr,
-                fr_arr,
-                cov_arr,
-                p_pos,
-                p_sc,
-                p_nb,
-                p_lc,
-                p_rc,
-                p_cov,
-            ) = _scan_windows_numba(
+        for w0, w1 in wins:
+            W = int(w1 - w0)
+            if W <= 0:
+                continue
+            cut_mat, left_cuts, right_cuts, cov_tf = _accumulate_region(
                 s_arr,
                 e_arr,
-                ws,
-                we,
-                int(len_range[0]),
-                int(len_range[1]),
+                w0,
+                w1,
+                min_len,
+                max_len,
                 int(len_bin),
                 int(tf_len_range[0]),
                 int(tf_len_range[1]),
-                flank_mode == "both",
-                float(pseudocount),
-                float(min_pillar_score),
-                int(min_len_bins),
-                float(min_pillar_prominence),
-                float(min_protection_score),
-                float(min_motif_prominence),
-                int(min_motif_distance),
             )
-            if len(c_arr) > 0:
-                comp = (
-                    pr_arr.astype(np.float64)
-                    * np.log2(1.0 + 0.5 * (fl_arr.astype(np.float64) + fr_arr.astype(np.float64)))
-                    * np.log2(1.0 + cov_arr.astype(np.float64))
-                )
-                motif_frames.append(
-                    pd.DataFrame(
-                        {
-                            "chrom": chrom,
-                            "start": st_arr,
-                            "end": en_arr,
-                            "center": c_arr,
-                            "width": en_arr - st_arr,
-                            "name": [f"motif_{chrom}_{c}" for c in c_arr],
-                            "score": pr_arr.astype(np.float64),
-                            "strand": ".",
-                            "protection_score": pr_arr.astype(np.float64),
-                            "raw_log2_protection": rpr_arr.astype(np.float64),
-                            "core_pillar_score": cps_arr.astype(np.float64),
-                            "left_pillar_score": fl_arr.astype(np.float64),
-                            "right_pillar_score": fr_arr.astype(np.float64),
-                            "tf_coverage": cov_arr.astype(np.float64),
-                            "composite_score": comp,
-                        }
-                    )
-                )
-            if return_pillars and len(p_pos) > 0:
-                tot = (p_lc + p_rc).astype(np.float64)
-                l_frac = np.where(tot > 0, p_lc.astype(np.float64) / np.where(tot > 0, tot, 1.0), 0.5)
-                pillar_frames.append(
-                    pd.DataFrame(
-                        {
-                            "chrom": chrom,
-                            "start": p_pos - 1,
-                            "end": p_pos + 2,
-                            "pos": p_pos,
-                            "name": [f"pillar_{chrom}_{p}" for p in p_pos],
-                            "score": p_sc.astype(np.float64),
-                            "strand": np.where(l_frac >= 0.5, "+", "-"),
-                            "pillar_score": p_sc.astype(np.float64),
-                            "n_len_bins": p_nb,
-                            "cuts": tot,
-                            "left_cuts": p_lc.astype(np.float64),
-                            "right_cuts": p_rc.astype(np.float64),
-                            "left_frac": l_frac,
-                            "tf_coverage": p_cov.astype(np.float64),
-                        }
-                    )
-                )
-        else:
-            for w0, w1 in wins:
-                res = scan_locus_pillars(
-                    store,
-                    (chrom, w0, w1),
-                    len_range=len_range,
-                    len_bin=len_bin,
-                    tf_len_range=tf_len_range,
-                    flank_mode=flank_mode,
-                    pseudocount=pseudocount,
-                    min_pillar_score=min_pillar_score,
-                    min_len_bins=min_len_bins,
-                    min_pillar_prominence=min_pillar_prominence,
-                    min_protection_score=min_protection_score,
-                    min_motif_prominence=min_motif_prominence,
-                    min_motif_distance=min_motif_distance,
-                )
-                if len(res.motifs) > 0:
-                    motif_frames.append(res.motifs)
-                if return_pillars and len(res.pillars) > 0:
-                    pillar_frames.append(res.pillars)
+            win_mat = _box_filter_2d_cols(cut_mat, int(pillar_window))
+            log_mat = np.log2(1.0 + win_mat)
+            pillar_score = log_mat.sum(axis=0)
+            n_len_bins = (win_mat >= 1.0).sum(axis=0).astype(np.int32)
+
+            p_df, m_df = _call_intervals_from_arrays(
+                chrom=chrom,
+                L=w0,
+                W=W,
+                pillar_score=pillar_score,
+                n_len_bins=n_len_bins,
+                left_cuts=left_cuts,
+                right_cuts=right_cuts,
+                cov_tf=cov_tf,
+                motif_width_range=tuple(motif_width_range),
+                flank_mode=flank_mode,
+                pseudocount=float(pseudocount),
+                pillar_window=int(pillar_window),
+                min_pillar_score=float(min_pillar_score),
+                min_len_bins=int(min_len_bins),
+                min_pillar_prominence=float(min_pillar_prominence),
+                min_pillar_distance=5,
+                min_protection_score=float(min_protection_score),
+                min_motif_prominence=float(min_motif_prominence),
+                min_motif_distance=int(min_motif_distance),
+            )
+            if len(m_df) > 0:
+                motif_frames.append(m_df)
+            if return_pillars and len(p_df) > 0:
+                pillar_frames.append(p_df)
 
     if motif_frames:
         motifs_df = (

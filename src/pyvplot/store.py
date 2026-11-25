@@ -1587,6 +1587,7 @@ class FragmentStore:
         min_protection_score: float = 0.75,
         min_motif_prominence: float = 0.20,
         min_motif_distance: int = 12,
+        expected_cuts: np.ndarray | None = None,
     ) -> LocusPillarScan:
         """Scan one window for multi-length cut pillars and protected motifs. Same as [`pyvplot.scan_locus_pillars`][pyvplot.scan_locus_pillars]."""
         from pyvplot.pillars import scan_locus_pillars
@@ -1609,6 +1610,7 @@ class FragmentStore:
             min_protection_score=min_protection_score,
             min_motif_prominence=min_motif_prominence,
             min_motif_distance=min_motif_distance,
+            expected_cuts=expected_cuts,
         )
 
     def scan_genome_pillars(
@@ -1618,6 +1620,10 @@ class FragmentStore:
         len_range: tuple[int, int] = (20, 250),
         len_bin: int = 10,
         tf_len_range: tuple[int, int] = (20, 120),
+        pillar_window: int = 3,
+        footprint_widths: Sequence[int] | np.ndarray | None = None,
+        motif_width_range: tuple[int, int] = (10, 24),
+        flank_pad: int = 2,
         min_bin_frags: int = 12,
         flank_mode: str = "both",
         pseudocount: float = 2.0,
@@ -1638,6 +1644,10 @@ class FragmentStore:
             len_range=len_range,
             len_bin=len_bin,
             tf_len_range=tf_len_range,
+            pillar_window=pillar_window,
+            footprint_widths=footprint_widths,
+            motif_width_range=motif_width_range,
+            flank_pad=flank_pad,
             min_bin_frags=min_bin_frags,
             flank_mode=flank_mode,
             pseudocount=pseudocount,

@@ -85,8 +85,10 @@ Returned DataFrame is indexed by `region_index` with columns:
 
 ## De-Novo Cut Pillars & Continuous 1-bp Protection Scanning
 
+Index `p` of `left_cuts`, `right_cuts`, and `pillar_score` is the cleavage boundary at genomic `L + p`. Candidate motifs are called by scoring pairs `(l, r)` of called pillars with `r - l` in `motif_width_range` by core depletion between them, producing exact `[l, r)` intervals without single-pillar shadow calls.
+
 ```python
-# 1. Single-locus continuous 1-bp multi-length pillar & protection profiles + called BED intervals
+# 1. Single-locus continuous 1-bp multi-length pillar & protection profiles + pair-called BED intervals
 scan = frags.scan_locus_pillars("chr1:10000-10600", flank_mode="both")   # or vp.scan_locus_pillars(frags, ...)
 fig, axes = scan.plot()                                                  # standalone 5-panel QC plot
 fig, ax = scan.plot(ax=ax, what="protection", show_motifs=True)          # or draw directly into one axis
