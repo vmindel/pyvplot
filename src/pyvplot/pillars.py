@@ -388,8 +388,16 @@ def _call_intervals_from_arrays(
             if w > max_w:
                 break
             fl_r = float(eff_ps[rp])
+            f_min = min(fl_l, fl_r)
+            f_max = max(fl_l, fl_r)
 
-            # Core interior strictly inside the two pillars (excluding pillar_window spillover)
+            # Reject composite pairs that span over an internal called pillar at least 65% as tall as f_min
+            if j > i + 1:
+                inner_max_pil = max(float(eff_ps[int(p_peaks[k])]) for k in range(i + 1, j))
+                if inner_max_pil >= 0.65 * f_min:
+                    continue
+
+            # Core interior strictly inside the two pillars (excluding 3-bp pillar_window spillover)
             c_lo = min(rp - 1, lp + edge_trim)
             c_hi = max(c_lo + 1, rp - edge_trim + 1)
             c_mean = float(ps_pad[c_hi] - ps_pad[c_lo]) / float(c_hi - c_lo)
@@ -399,9 +407,6 @@ def _call_intervals_from_arrays(
             # Both pillar boundaries must exceed the core interior
             if fl_l <= c_mean + 1.0 or fl_r <= c_mean + 1.0:
                 continue
-
-            f_min = min(fl_l, fl_r)
-            f_max = max(fl_l, fl_r)
             if flank_mode == "both":
                 f_paired = (max(0.0, f_min) ** 0.65) * (max(0.0, f_max) ** 0.35)
             else:
