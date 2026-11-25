@@ -533,6 +533,22 @@ def _call_intervals_from_arrays(
     return pillars_df, motifs_df
 
 
+def _draw_protection(ax: Any, xs: np.ndarray, profile: np.ndarray, motifs: pd.DataFrame, min_prot: float) -> None:
+    """Grey exploratory profile, called pillar pairs as bars at their pair score, and the threshold."""
+    ax.fill_between(xs, 0.0, profile, color="0.78", lw=0, step="mid", label="1-bp profile (exploratory, not the caller)")
+    ax.axhline(0.0, color="0.3", lw=0.6)
+    ax.axhline(min_prot, color="#d62828", ls="--", lw=0.9, label=f"min_protection_score ({min_prot:.2f})")
+    for i, (_, m) in enumerate(motifs.iterrows()):
+        s, e, sc = float(m["start"]), float(m["end"]), float(m["protection_score"])
+        ax.axvspan(s, e, color="#ffd166", alpha=0.35, lw=0, zorder=0)
+        ax.bar((s + e) / 2.0, sc, width=e - s, color="#1b4332", alpha=0.9, zorder=3,
+               label=f"Called motif: pair score (n={len(motifs)})" if i == 0 else None)
+    top = max([min_prot, *(float(v) for v in motifs["protection_score"])] + ([float(np.max(profile))] if len(profile) else []))
+    bottom = float(np.min(profile)) if len(profile) else 0.0
+    # headroom so the legend in the upper corner clears the tallest bar
+    ax.set_ylim(min(bottom * 1.1, -0.1), top * 1.9)
+
+
 # ---------------------------------------------------------------------------
 # LocusPillarScan dataclass
 # ---------------------------------------------------------------------------
@@ -789,9 +805,17 @@ class LocusPillarScan:
     ) -> tuple[Any, Any]:
         """Plot into a single existing ``ax`` (for ``pygenomic_tracks`` / multi-track figures)
         or create a standalone multi-panel QC figure when ``ax is None``.
+
+        Called motifs are drawn as bars spanning ``[start, end)`` at their pair
+        ``protection_score``, with ``min_protection_score`` as the threshold line: that is the
+        score calls are made on. The 1-bp ``protection_score`` profile is drawn in grey as
+        context only; motifs are not called from it.
+
+        ``mode="tracks"`` (default) returns four axes: fragment ends (or the length-resolved
+        cut matrix without ``store``), protection, pillar score, and TF-size fragment coverage.
+        ``mode="multiscale"`` adds the width-resolved ``protection_2d`` panel.
         """
         import matplotlib.pyplot as plt
-        from matplotlib.gridspec import GridSpec
 
         L, R = self.start, self.end
         xs = self.pos
@@ -801,30 +825,14 @@ class LocusPillarScan:
                 raise ValueError(f"what must be 'protection', 'pillars' or 'both', got {what!r}.")
             fig = ax.figure
             if what in {"protection", "both"}:
-                pos_vals = np.maximum(0.0, self.protection_score)
-                neg_vals = np.minimum(0.0, self.protection_score)
-                ax.bar(xs, pos_vals, width=1.0, color="#1b4332", edgecolor="none", alpha=0.9, label="Protected (+)")
-                ax.bar(xs, neg_vals, width=1.0, color="0.55", edgecolor="none", alpha=0.8, label="Cleavage pillar (-)")
-                ax.axhline(0.0, color="black", lw=0.6)
+                _draw_protection(
+                    ax,
+                    xs,
+                    self.protection_score,
+                    self.motifs if show_motifs else self.motifs.iloc[:0],
+                    float(self.metadata.get("min_protection_score", 0.75)),
+                )
                 ax.set_ylabel("Protection")
-                if show_motifs and len(self.motifs) > 0:
-                    ymax = max(0.5, float(np.max(pos_vals)) if len(pos_vals) else 0.5)
-                    for i, (_, m) in enumerate(self.motifs.iterrows()):
-                        ax.axvspan(
-                            float(m["start"]),
-                            float(m["end"]),
-                            color="#ffd166",
-                            alpha=0.38,
-                            zorder=0,
-                            label="Called motif" if i == 0 else None,
-                        )
-                        ax.plot(
-                            [float(m["start"]), float(m["end"])],
-                            [ymax * 1.04, ymax * 1.04],
-                            color="#d62828",
-                            lw=2.2,
-                            solid_capstyle="butt",
-                        )
             if what == "pillars":
                 ax.fill_between(xs, 0, self.pillar_score, color="#3a86ff", alpha=0.30)
                 ax.plot(xs, self.pillar_score, color="#1d3557", lw=1.2, label="Pillar score")
@@ -874,58 +882,24 @@ class LocusPillarScan:
             ]
 
         if mode == "tracks":
-            fig = plt.figure(figsize=figsize)
-            gs = GridSpec(
-                5,
+            fig, axes = plt.subplots(
+                4,
                 1,
-                figure=fig,
-                height_ratios=[2.0, 0.26, 1.15, 0.26, 1.15],
-                hspace=0.12,
+                figsize=figsize,
+                sharex=True,
+                gridspec_kw={"height_ratios": [1.6, 1.1, 1.1, 0.5], "hspace": 0.08},
             )
-            ax_top = fig.add_subplot(gs[0])
-            ax_pstrip = fig.add_subplot(gs[1], sharex=ax_top)
-            ax_prot = fig.add_subplot(gs[2], sharex=ax_top)
-            ax_cstrip = fig.add_subplot(gs[3], sharex=ax_top)
-            ax_pillar = fig.add_subplot(gs[4], sharex=ax_top)
-            axes = np.array([ax_top, ax_pstrip, ax_prot, ax_cstrip, ax_pillar], dtype=object)
+            ax_top, ax_prot, ax_pillar, ax_cov = axes
+            min_l, max_l = self.metadata.get("len_range", (20, 250))
 
             if store is not None and not store.is_stranded:
-                min_l, max_l = self.metadata.get("len_range", (20, 250))
-                lv = store.locus_vplot((self.chrom, L, R), feature="cuts", len_range=(min_l, max_l + 10))
+                lv = store.locus_vplot((self.chrom, L, R), feature="cuts", len_range=(min_l, max_l))
                 pts = lv.points
-                left_pts = pts[pts["end"] == "left"]
-                right_pts = pts[pts["end"] == "right"]
-                ax_top.scatter(
-                    left_pts["pos"], left_pts["frag_len"], s=5, color="#e63946", alpha=0.65, label="Left cut (start)"
-                )
-                ax_top.scatter(
-                    right_pts["pos"], right_pts["frag_len"], s=5, color="#1d3557", alpha=0.65, label="Right cut (end)"
-                )
-                for i, (_, m) in enumerate(self.motifs.iterrows()):
-                    ax_top.axvspan(
-                        float(m["start"]),
-                        float(m["end"]),
-                        color="#ffd166",
-                        alpha=0.38,
-                        zorder=0,
-                        label=f"De-novo called motif (n={len(self.motifs)})" if i == 0 else None,
-                    )
-                if sub_hits is not None:
-                    for i, (_, h) in enumerate(sub_hits.iterrows()):
-                        ax_top.axvspan(
-                            float(h["start"]),
-                            float(h["end"]),
-                            ymin=0.92,
-                            ymax=1.0,
-                            color="#ef476f",
-                            alpha=0.95,
-                            zorder=6,
-                            label=f"Reference hit (n={len(sub_hits)})" if i == 0 else None,
-                        )
-                ax_top.set_xlim(L, R)
-                ax_top.set_ylim(min_l, max_l + 10)
+                for end, color, label in (("left", "#e63946", "Fragment start"), ("right", "#1d3557", "Fragment end")):
+                    sel = pts[pts["end"] == end]
+                    ax_top.scatter(sel["pos"], sel["frag_len"], s=4, color=color, alpha=0.55, lw=0, label=label)
+                ax_top.set_ylim(min_l, max_l)
                 ax_top.set_ylabel("Fragment length (bp)")
-                ax_top.legend(loc="upper right", fontsize=8.5, ncol=2, framealpha=0.9)
             else:
                 ax_top.imshow(
                     self.log_cut_matrix,
@@ -935,90 +909,54 @@ class LocusPillarScan:
                     cmap="magma",
                     interpolation="nearest",
                 )
-                for _, m in self.motifs.iterrows():
-                    ax_top.axvspan(float(m["start"]), float(m["end"]), color="#ffd166", alpha=0.22, lw=0)
-                if sub_hits is not None:
-                    for _, h in sub_hits.iterrows():
-                        ax_top.axvspan(float(h["start"]), float(h["end"]), color="#00e5ff", alpha=0.20, lw=0)
-                ax_top.set_ylabel("Frag len (bp)\n[log2(1+cuts)]")
-
-            ax_top.set_title(
-                f"{self.chrom}:{L:,}-{R:,} — Cleavage Pillars, 1-bp Protection Heatmap Strip & De-Novo Motifs",
-                fontsize=11,
-                fontweight="bold",
-                loc="left",
-            )
-
-            vmax_p = max(1.0, float(np.max(np.abs(self.protection_score))) if len(self.protection_score) else 1.0)
-            ax_pstrip.imshow(
-                self.protection_score[None, :],
-                aspect="auto",
-                cmap="RdYlGn",
-                extent=[L, R, 0, 1],
-                vmin=-vmax_p,
-                vmax=vmax_p,
-            )
-            if sub_hits is not None:
-                for _, h in sub_hits.iterrows():
-                    ax_pstrip.plot([float(h["start"]), float(h["end"])], [0.5, 0.5], color="#ef476f", lw=3.0)
-            ax_pstrip.set_yticks([])
-            ax_pstrip.set_ylabel("Prot.\nheatmap", fontsize=8, rotation=0, ha="right", va="center")
-
-            pos_vals = np.maximum(0.0, self.protection_score)
-            neg_vals = np.minimum(0.0, self.protection_score)
-            ax_prot.bar(xs, pos_vals, width=1.0, color="#1b4332", edgecolor="none", alpha=0.9, label="Protected trough (+)")
-            ax_prot.bar(xs, neg_vals, width=1.0, color="0.55", edgecolor="none", alpha=0.8, label="Cleavage pillar (-)")
-            ax_prot.axhline(0.0, color="black", lw=0.6)
-            min_prot = self.metadata.get("min_protection_score", 0.75)
-            ax_prot.axhline(min_prot, color="#d62828", ls="--", lw=0.9, label=f"Call threshold ({min_prot:.2f})")
+                ax_top.set_ylabel("Fragment length (bp)\ncuts, log2(1 + n)")
             for i, (_, m) in enumerate(self.motifs.iterrows()):
-                ax_prot.axvspan(
+                ax_top.axvspan(
                     float(m["start"]),
                     float(m["end"]),
                     color="#ffd166",
-                    alpha=0.45,
-                    zorder=0,
-                    label=f"Called motif interval (n={len(self.motifs)})" if i == 0 else None,
+                    alpha=0.35,
+                    lw=0,
+                    label=f"Called motif (n={len(self.motifs)})" if i == 0 else None,
                 )
-            ax_prot.set_ylabel("Protection\nscore (1-bp)")
-            ax_prot.legend(loc="upper right", fontsize=8, ncol=2, framealpha=0.9)
+            if sub_hits is not None:
+                for i, (_, h) in enumerate(sub_hits.iterrows()):
+                    ax_top.axvspan(
+                        float(h["start"]),
+                        float(h["end"]),
+                        ymin=0.93,
+                        ymax=1.0,
+                        color="#ef476f",
+                        label=f"Reference hit (n={len(sub_hits)})" if i == 0 else None,
+                    )
+            if ax_top.get_legend_handles_labels()[0]:
+                ax_top.legend(loc="upper right", fontsize=8, ncol=2, framealpha=0.9)
+            ax_top.set_title(f"{self.chrom}:{L:,}-{R:,}", fontsize=11, loc="left")
 
-            vmax_c = max(10.0, float(np.percentile(self.pillar_score, 99)) if len(self.pillar_score) else 10.0)
-            ax_cstrip.imshow(
-                self.pillar_score[None, :],
-                aspect="auto",
-                cmap="Blues",
-                extent=[L, R, 0, 1],
-                vmin=0.0,
-                vmax=vmax_c,
+            _draw_protection(
+                ax_prot, xs, self.protection_score, self.motifs, float(self.metadata.get("min_protection_score", 0.75))
             )
-            ax_cstrip.set_yticks([])
-            ax_cstrip.set_ylabel("Pillar\nheatmap", fontsize=8, rotation=0, ha="right", va="center")
+            ax_prot.set_ylabel("Protection")
+            ax_prot.legend(loc="upper right", fontsize=8, ncol=1, framealpha=0.9)
 
-            ax_pillar.fill_between(
-                xs, 0, self.pillar_score, color="#3a86ff", alpha=0.30, label="1-bp Multi-length pillar score"
-            )
-            ax_pillar.plot(xs, self.pillar_score, color="#1d3557", lw=1.2)
-            if len(self.pillars) > 0:
+            ax_pillar.fill_between(xs, 0, self.pillar_score, color="#3a86ff", alpha=0.30, lw=0)
+            ax_pillar.plot(xs, self.pillar_score, color="#1d3557", lw=1.0, label="Pillar score")
+            if show_pillars and len(self.pillars) > 0:
                 ax_pillar.scatter(
                     self.pillars["pos"],
                     self.pillars["pillar_score"],
                     color="#e63946",
-                    s=22,
+                    s=14,
                     zorder=5,
-                    label=f"Called cut pillars (n={len(self.pillars)})",
+                    label=f"Called pillar (n={len(self.pillars)})",
                 )
-            ax_cov = ax_pillar.twinx()
-            ax_cov.plot(xs, self.tf_coverage, color="#fb8500", lw=1.3, ls="-.", alpha=0.9)
-            ax_cov.set_ylabel("TF coverage", color="#fb8500", fontsize=8.5)
             ax_pillar.set_ylabel("Pillar score")
-            ax_pillar.set_xlabel(f"{self.chrom} genomic coordinate (bp, 0-based)")
             ax_pillar.legend(loc="upper left", fontsize=8, framealpha=0.9)
 
-            for ax_hide in (ax_top, ax_pstrip, ax_prot, ax_cstrip):
-                ax_hide.tick_params(labelbottom=False)
-                ax_hide.get_xaxis().get_offset_text().set_visible(False)
-
+            ax_cov.fill_between(xs, 0, self.tf_coverage, color="0.7", lw=0, step="mid")
+            ax_cov.set_ylabel("TF-size\ncoverage", fontsize=8.5)
+            ax_cov.set_xlabel(f"{self.chrom} (cut boundary, 0-based)")
+            ax_cov.set_xlim(L, R)
             return fig, axes
 
         # mode == "multiscale"
@@ -1087,27 +1025,8 @@ class LocusPillarScan:
 
         ax2 = axes[2]
         if show_raw_protection:
-            ax2.plot(
-                xs,
-                self.raw_log2_protection,
-                color="0.65",
-                lw=0.9,
-                ls=":",
-                label="Unweighted two-sided log2((Flank+pc)/(Core+pc))",
-            )
-        ax2.fill_between(xs, 0, self.protection_score, color="#2b9348", alpha=0.35)
-        ax2.plot(xs, self.protection_score, color="#1b4332", lw=1.6, label="Coverage-weighted protection score (1-bp)")
-        min_prot = self.metadata.get("min_protection_score", 0.75)
-        ax2.axhline(min_prot, color="#d62828", ls="--", lw=0.9, label=f"Threshold ({min_prot:.2f})")
-        for i, (_, m) in enumerate(self.motifs.iterrows()):
-            ax2.axvspan(
-                float(m["start"]),
-                float(m["end"]),
-                color="#ffd166",
-                alpha=0.58,
-                label=f"Called motif interval (n={len(self.motifs)})" if i == 0 else None,
-            )
-            ax2.plot(float(m["center"]), float(m["protection_score"]), "o", color="#d62828", ms=5, zorder=5)
+            ax2.plot(xs, self.raw_log2_protection, color="0.6", lw=0.8, ls=":", label="1-bp profile, unweighted")
+        _draw_protection(ax2, xs, self.protection_score, self.motifs, float(self.metadata.get("min_protection_score", 0.75)))
         if sub_hits is not None:
             for i, (_, h) in enumerate(sub_hits.iterrows()):
                 ax2.axvspan(
@@ -1136,14 +1055,12 @@ class LocusPillarScan:
                 zorder=5,
                 label=f"Called cut pillars (n={len(self.pillars)})",
             )
-        ax3_r = ax3.twinx()
-        ax3_r.plot(xs, self.tf_coverage, color="#fb8500", lw=1.2, ls="-.", alpha=0.88)
-        ax3_r.set_ylabel("TF coverage", color="#fb8500", fontsize=8)
         ax3.set_ylabel("Pillar score")
         ax3.set_xlabel(f"{self.chrom} genomic coordinate (bp, 0-based)")
         ax3.legend(loc="upper left", fontsize=8, framealpha=0.9)
         cb_d2 = fig.colorbar(im1, ax=ax3, pad=0.01, aspect=15)
         cb_d2.ax.set_visible(False)
+        ax3.set_xlim(L, R)
 
         return fig, axes
 

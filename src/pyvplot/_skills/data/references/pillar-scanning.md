@@ -18,7 +18,7 @@ scan = store.scan_locus_pillars("chr1:10000-10600")          # or vp.scan_locus_
 scan.motifs[["chrom", "start", "end", "width", "protection_score", "composite_score"]]
 scan.pillars[["pos", "pillar_score", "n_len_bins", "left_frac", "strand"]]
 strict = scan.call(min_protection_score=1.0)
-fig, axes = scan.plot()                                      # QC figure; scan.plot(ax=ax, what="protection") for one track
+fig, axes = scan.plot(store=store)                           # 4 panels: fragment ends, pair scores vs threshold, pillars, coverage
 tracks = scan.to_pygenomic_tracks()                          # dict of chrom/start/end DataFrames
 
 # 2. Sequence bias (MNase AT preference): k-mer table from a naked-DNA / free-MNase control
@@ -49,7 +49,7 @@ motifs, pillars = store.scan_genome_pillars(min_protection_score=1.0, expected_c
 ## Footguns
 
 - **Thresholds depend on depth.** `pillar_score` sums log counts, so defaults call more at high depth and fewer at low depth. Calibrate on a control per dataset; do not reuse thresholds across libraries.
-- **`protection_score` the array is not the caller.** `scan.protection_score` / `protection_2d` / `best_widths` are an exploratory sliding-window profile (shaped by `footprint_widths`, `flank_pad`). Do not threshold it to get motifs; use `scan.motifs` / `scan.call(...)`. The motif column `protection_score` is the pair score and is what calls use.
+- **`protection_score` the array is not the caller.** In `scan.plot()` calls are the dark bars at their pair score; the grey 1-bp profile is context. `scan.protection_score` / `protection_2d` / `best_widths` are an exploratory sliding-window profile (shaped by `footprint_widths`, `flank_pad`). Do not threshold it to get motifs; use `scan.motifs` / `scan.call(...)`. The motif column `protection_score` is the pair score and is what calls use.
 - **`expected_cuts` shapes.** `scan_locus_pillars` takes an array of length `end - start` or a function `(chrom, start, end) -> array`; `scan_genome_pillars` takes only the function (a genome-length array would not fit in memory). Any scale; rescaled to mean 1 per window. A wrong length raises. It corrects pair scoring only: pillars are still called on the uncorrected score. `scan.call()` reuses the scan's array.
 - **Packed footprints.** The stretch between two neighbouring sites is bounded by pillars on both sides; if it is also uncut it is called as its own motif. Check widths and motif content.
 - **One-sided sites are not called.** Both flanks must be called pillars, even with `flank_mode="either"`.

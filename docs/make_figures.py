@@ -353,12 +353,82 @@ def make_signal_heatmap_figure() -> None:
     plt.close(fig)
 
 
+def _pillar_tutorial_store(
+    sites: tuple[tuple[int, int], ...] = ((5000, 5016), (5300, 5312)), seed: int = 3
+) -> vp.FragmentStore:
+    """The store simulated in docs/tutorials/pillar-scanning.md: background plus bound sites."""
+    rng = np.random.default_rng(seed)
+    starts, ends = [], []
+    for _ in range(3000):
+        s = int(rng.integers(4000, 6000))
+        starts.append(s)
+        ends.append(s + int(rng.integers(20, 250)))
+    for lo, hi in sites:
+        for _ in range(80):
+            starts.append(lo - int(rng.integers(25, 220)))
+            ends.append(lo)
+            starts.append(hi)
+            ends.append(hi + int(rng.integers(25, 220)))
+        for _ in range(40):
+            starts.append(lo)
+            ends.append(hi + int(rng.integers(20, 80)))
+    order = np.argsort(starts)
+    return vp.FragmentStore.from_arrays(
+        {"chr1": np.asarray(starts)[order].astype(np.int32)},
+        {"chr1": np.asarray(ends)[order].astype(np.int32)},
+        assay="chec",
+    )
+
+
+def make_pillar_figures() -> None:
+    frags = _pillar_tutorial_store()
+    scan = frags.scan_locus_pillars("chr1:4800-5500")
+    fig, _ = scan.plot(store=frags, figsize=(11.0, 8.0))
+    fig.savefig(IMG_DIR / "pillar_scan_locus.png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+    # Calibration: the tutorial's background-only control at the sample's background depth
+    rng_c = np.random.default_rng(12)
+    c_starts = np.sort(rng_c.integers(4000, 6000, 3000))
+    control = vp.FragmentStore.from_arrays(
+        {"chr1": c_starts.astype(np.int32)},
+        {"chr1": (c_starts + rng_c.integers(20, 250, 3000)).astype(np.int32)},
+        assay="chec",
+    )
+    loose = dict(min_protection_score=0.0, min_raw_protection=0.0, min_bin_frags=5)
+    s = frags.scan_genome_pillars(**loose)["protection_score"].to_numpy()
+    c = control.scan_genome_pillars(**loose)["protection_score"].to_numpy()
+    thr = np.linspace(0.0, 2.2, 221)
+    n_s = np.array([(s >= t).sum() for t in thr])
+    n_c = np.array([(c >= t).sum() for t in thr])
+
+    fig, ax = plt.subplots(figsize=(6.4, 3.6), constrained_layout=True)
+    ax.step(thr, n_s, where="post", color="#257de0", lw=2.0)
+    ax.step(thr, n_c, where="post", color="#f47230", lw=2.0)
+    ax.set_yscale("symlog", linthresh=1)
+    ax.set_yticks([0, 1, 2, 5, 10, 20, 50])
+    ax.set_yticklabels(["0", "1", "2", "5", "10", "20", "50"])
+    ax.axvline(1.0, color="#666666", lw=1.0, ls="--")
+    ax.text(1.03, 30, "chosen threshold 1.0:\ncontrol has no calls left", fontsize=8.5, color="#191919", va="top")
+    ax.text(1.25, 2.25, "sample (2 bound sites)", fontsize=8.5, color="#191919", va="bottom")
+    first_zero = float(thr[np.argmax(n_c == 0)])
+    ax.text(first_zero - 0.02, 0.45, "background-only control", fontsize=8.5, color="#191919", ha="right", va="center")
+    ax.set_xlabel("min_protection_score")
+    ax.set_ylabel("motif calls at or above threshold")
+    ax.grid(axis="y", color="#e6e6e6", lw=0.6)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    fig.savefig(IMG_DIR / "pillar_calibration.png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     make_vplot_figures()
     make_signal_heatmap_figure()
     make_footprint_and_matrix_figure()
     make_qc_and_phasogram_figures()
     make_bias_figure()
+    make_pillar_figures()
     files = sorted(p.name for p in IMG_DIR.glob("*.png"))
     print(f"Generated {len(files)} figures in {IMG_DIR}: {', '.join(files)}")
 
