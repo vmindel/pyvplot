@@ -263,6 +263,29 @@ def _find_peaks_1d(
     return np.sort(np.array(kept, dtype=np.int64))
 
 
+def _refine_pillar_positions(peaks: np.ndarray, cuts: np.ndarray, half_pw: int) -> np.ndarray:
+    """Move each detected pillar to the centroid of its unsmoothed cut stack.
+
+    ``pillar_score`` is box-filtered over ``pillar_window`` bp, so a cut stack one boundary
+    wide becomes a flat plateau and the peak sits on whichever plateau position background
+    noise favours, up to ``half_pw`` bp off. The stack lies within ``half_pw`` of the detected
+    peak, so the centroid of raw cuts over ``half_pw + 1`` either side recovers it. Unlike
+    the argmax it stays centred on stacks jittered over several boundaries.
+    """
+    if len(peaks) == 0:
+        return peaks
+    n = len(cuts)
+    cuts = np.asarray(cuts, dtype=np.float64)
+    out = peaks.copy()
+    for i, p in enumerate(peaks):
+        lo, hi = max(0, int(p) - half_pw - 1), min(n, int(p) + half_pw + 2)
+        seg = cuts[lo:hi]
+        tot = float(seg.sum())
+        if tot > 0.0:
+            out[i] = int(np.floor(np.dot(np.arange(lo, hi), seg) / tot + 0.5))
+    return np.unique(out)
+
+
 def _compute_cov_weight(cov_tf: np.ndarray) -> np.ndarray:
     """Smooth local coverage weighting in [0, 1] using a 301-bp local peak envelope."""
     if len(cov_tf) == 0:
@@ -310,6 +333,7 @@ def _call_intervals_from_arrays(
         p_peaks = p_peaks[n_len_bins[p_peaks] >= min_len_bins]
 
     half_pw = max(1, int(pillar_window) // 2)
+    p_peaks = _refine_pillar_positions(p_peaks, left_cuts + right_cuts, half_pw)
     p_rows = []
     for p in p_peaks:
         w_lo = max(0, int(p) - half_pw)

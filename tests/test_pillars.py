@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import pyvplot as vp
 import pyvplot.pillars as pillars_mod
@@ -198,6 +199,9 @@ def test_truncation_regression_wide_active_window():
 
     assert len(motifs_nb) >= 2000
     assert int(motifs_nb["end"].max()) >= 69_900
+    # Every planted footprint comes back exactly: 1-bp cut stacks must not drift to a plateau edge.
+    planted = {(b, b + 16) for b in range(10_000, 70_000, 30)}
+    assert planted <= set(zip(motifs_nb["start"].tolist(), motifs_nb["end"].tolist(), strict=True))
     np.testing.assert_array_equal(
         motifs_nb[["start", "end", "center"]].to_numpy(),
         motifs_py[["start", "end", "center"]].to_numpy(),
@@ -267,3 +271,39 @@ def test_simulation_precision_recall_and_zero_boundary_offset():
     assert recall_count >= 108
     assert np.median(start_offs) == 0.0
     assert np.median(end_offs) == 0.0
+
+
+@pytest.mark.parametrize("jitter", [0, 1])
+def test_pillars_land_on_sharp_and_jittered_cut_stacks(jitter):
+    """pillar_score is box-filtered, so a 1-bp cut stack is a flat plateau whose peak position
+    background noise decides. Called pillars and motif edges must sit on the stack itself,
+    whether it is 1 bp wide or spread over +-1 bp, for every background realisation.
+    """
+    l_b, r_b = 5000, 5016
+    for seed in range(12):
+        rng = np.random.default_rng(seed)
+        starts, ends = [], []
+        for _ in range(3000):
+            s = int(rng.integers(4000, 6000))
+            starts.append(s)
+            ends.append(s + int(rng.integers(20, 250)))
+        for _ in range(80):
+            fl = int(rng.integers(25, 220))
+            starts.append(l_b - fl)
+            ends.append(l_b + int(rng.integers(-jitter, jitter + 1)))
+            s0 = r_b + int(rng.integers(-jitter, jitter + 1))
+            starts.append(s0)
+            ends.append(s0 + int(rng.integers(25, 220)))
+        for _ in range(40):
+            starts.append(l_b)
+            ends.append(r_b + int(rng.integers(20, 80)))
+        order = np.argsort(starts)
+        store = vp.FragmentStore.from_arrays(
+            {"chr1": np.array(starts)[order].astype(np.int32)},
+            {"chr1": np.array(ends)[order].astype(np.int32)},
+            assay="chec",
+        )
+        scan = store.scan_locus_pillars("chr1:4800-5200")
+        assert {l_b, r_b} <= set(scan.pillars["pos"].tolist()), seed
+        hits = scan.motifs[(scan.motifs["center"] - 5008).abs() < 8]
+        assert hits[["start", "end"]].values.tolist() == [[l_b, r_b]], seed

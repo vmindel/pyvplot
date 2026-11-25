@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Added (de-novo cut-pillar & motif footprint scanner)
-- `scan_locus_pillars` and `scan_genome_pillars` (and their `FragmentStore` methods) identify multi-length cleavage pillars (`pillar_score`) and protected motif footprints from paired-end fragment cleavage geometry. Index `p` of `left_cuts`/`right_cuts`/`pillar_score` represents the cut boundary at genomic `L + p`; candidate motifs are called as pairs `(l, r)` of called pillars with `r - l` in `motif_width_range` scored by core depletion between them, producing exact `[l, r)` intervals without single-flank shadow calls.
+- `scan_locus_pillars` and `scan_genome_pillars` (and their `FragmentStore` methods) identify multi-length cleavage pillars (`pillar_score`) and protected motif footprints from paired-end fragment cleavage geometry. Index `p` of `left_cuts`/`right_cuts`/`pillar_score` represents the cut boundary at genomic `L + p`; candidate motifs are called as pairs `(l, r)` of called pillars with `r - l` in `motif_width_range` scored by core depletion between them, producing exact `[l, r)` intervals without single-flank shadow calls. Pillars are detected on the `pillar_window`-smoothed score, then placed at the centroid of their unsmoothed cut stack, so a stack 1 bp wide is not shifted to a noise-chosen edge of the smoothing plateau.
 - `LocusPillarScan` provides `.call(...)` for instant re-thresholding (including an optional `expected_cuts` hook for sequence-bias normalization), `.to_track_df(...)` and `.to_pygenomic_tracks(...)` returning `chrom, start, end` DataFrames ready for `pygenomic_tracks`, and `.plot(ax=...)` for single-axis track rendering or standalone multi-panel QC figures.
 
 ### Fixed (bias sequence extraction)
