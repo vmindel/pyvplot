@@ -7,7 +7,7 @@ import json
 import warnings
 from array import array
 from collections import defaultdict
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -19,6 +19,7 @@ from pyvplot.assays import AssayConfig, get_assay
 if TYPE_CHECKING:
     from pyvplot.locus import LocusVPlot
     from pyvplot.matrices import CutSiteFootprint, SignalMatrix
+    from pyvplot.pillars import LocusPillarScan
     from pyvplot.qc import PhasogramResult
     from pyvplot.vplot import VPlot
 
@@ -1566,6 +1567,88 @@ class FragmentStore:
         from pyvplot.qc import qc_summary
 
         return qc_summary(self, peaks=peaks)
+
+    def scan_locus_pillars(
+        self,
+        region: Any,
+        *,
+        len_range: tuple[int, int] = (20, 250),
+        len_bin: int = 10,
+        tf_len_range: tuple[int, int] = (20, 120),
+        pillar_window: int = 3,
+        footprint_widths: Sequence[int] | np.ndarray | None = None,
+        motif_width_range: tuple[int, int] = (10, 24),
+        flank_pad: int = 2,
+        flank_mode: str = "both",
+        pseudocount: float = 2.0,
+        min_pillar_score: float = 8.0,
+        min_len_bins: int = 4,
+        min_pillar_prominence: float = 2.0,
+        min_protection_score: float = 0.75,
+        min_motif_prominence: float = 0.20,
+        min_motif_distance: int = 12,
+    ) -> LocusPillarScan:
+        """Scan one window for multi-length cut pillars and protected motifs. Same as [`pyvplot.scan_locus_pillars`][pyvplot.scan_locus_pillars]."""
+        from pyvplot.pillars import scan_locus_pillars
+
+        return scan_locus_pillars(
+            self,
+            region,
+            len_range=len_range,
+            len_bin=len_bin,
+            tf_len_range=tf_len_range,
+            pillar_window=pillar_window,
+            footprint_widths=footprint_widths,
+            motif_width_range=motif_width_range,
+            flank_pad=flank_pad,
+            flank_mode=flank_mode,
+            pseudocount=pseudocount,
+            min_pillar_score=min_pillar_score,
+            min_len_bins=min_len_bins,
+            min_pillar_prominence=min_pillar_prominence,
+            min_protection_score=min_protection_score,
+            min_motif_prominence=min_motif_prominence,
+            min_motif_distance=min_motif_distance,
+        )
+
+    def scan_genome_pillars(
+        self,
+        *,
+        chroms: Collection[str] | None = None,
+        len_range: tuple[int, int] = (20, 250),
+        len_bin: int = 10,
+        tf_len_range: tuple[int, int] = (20, 120),
+        min_bin_frags: int = 12,
+        flank_mode: str = "both",
+        pseudocount: float = 2.0,
+        min_pillar_score: float = 8.0,
+        min_len_bins: int = 4,
+        min_pillar_prominence: float = 2.0,
+        min_protection_score: float = 0.75,
+        min_motif_prominence: float = 0.20,
+        min_motif_distance: int = 12,
+        return_pillars: bool = False,
+    ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+        """Scan active windows genome-wide for protected motifs and cut pillars. Same as [`pyvplot.scan_genome_pillars`][pyvplot.scan_genome_pillars]."""
+        from pyvplot.pillars import scan_genome_pillars
+
+        return scan_genome_pillars(
+            self,
+            chroms=chroms,
+            len_range=len_range,
+            len_bin=len_bin,
+            tf_len_range=tf_len_range,
+            min_bin_frags=min_bin_frags,
+            flank_mode=flank_mode,
+            pseudocount=pseudocount,
+            min_pillar_score=min_pillar_score,
+            min_len_bins=min_len_bins,
+            min_pillar_prominence=min_pillar_prominence,
+            min_protection_score=min_protection_score,
+            min_motif_prominence=min_motif_prominence,
+            min_motif_distance=min_motif_distance,
+            return_pillars=return_pillars,
+        )
 
     @classmethod
     def merge(

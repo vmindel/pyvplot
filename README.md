@@ -42,6 +42,13 @@ store.to_matrix("motifs.bed", flank=500, bin_size=10, feature="midpoint", len_ra
 # One locus, unaggregated: every fragment end, labelled near/far from the motif in the window.
 store.locus_vplot("chr1:7170-7970", motif="chr1:7560-7580:+", feature="cuts").plot()
 
+# De-novo multi-length cut pillars & continuous 1-bp motif protection score (with chrom, start, end DataFrames):
+scan = store.scan_locus_pillars("chr1:7170-7970")
+scan.plot()                                   # multi-panel QC or single-axis scan.plot(ax=ax)
+tracks = scan.to_pygenomic_tracks()           # dict of chrom, start, end DataFrames for pygenomic_tracks
+scan_relaxed = scan.call(min_protection_score=0.4, min_motif_prominence=0.1)  # instant re-thresholding
+genome_motifs = store.scan_genome_pillars()   # fast whole-genome de-novo scan
+
 # Mutant vs WT, log2 fold change after CPM.
 v_ko = vp.FragmentStore.load("ko.frags.npz").vplot("motifs.bed", flank=300, pos_bin=5, len_bin=5)
 v_ko.diff(v).plot()

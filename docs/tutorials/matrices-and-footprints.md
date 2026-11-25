@@ -145,3 +145,40 @@ print(scores[["center_cuts", "flank_cuts", "protection_score", "footprint_depth"
 motif_bound            0.0       140.0              5.83             -2.8
 motif_unbound         20.0        60.0              0.25             -0.2
 ```
+
+## De-novo cut pillars and continuous 1-bp protection scanning
+
+When motif coordinates are not known in advance, `scan_locus_pillars()` (for a single window) and `scan_genome_pillars()` (genome-wide) identify bound motifs directly from paired-end cleavage geometry. At a bound motif flank, cuts pile up within a few base pairs across many distinct fragment lengths (**cut pillars**), whereas the motif core is a cleavage trough spanned by short TF fragments.
+
+`scan_locus_pillars()` computes:
+
+- `pillar_score`: continuous 1-bp multi-length cut-pillar score $\sum_b \log_2(1 + c_{b,\text{3bp}}(x))$ across 10-bp fragment-length bins;
+- `protection_score`: unthresholded, signed continuous 1-bp protection score (positive inside protected troughs where flanking cut pillars exceed the core; negative on top of cut pillars), weighted smoothly by short-fragment spanning coverage;
+- `pillars` and `motifs`: discrete `chrom, start, end` BED DataFrames called from peaks of the continuous tracks.
+
+Use `scan.call(...)` to re-threshold `.motifs` and `.pillars` instantaneously without re-scanning fragments, `scan.to_track_df(...)` / `scan.to_pygenomic_tracks()` to export `chrom, start, end` DataFrames for `pygenomic_tracks`, and `scan.plot(ax=ax)` to draw the continuous 1-bp protection track into an existing figure axis (or `scan.plot()` for a standalone multi-panel QC figure).
+
+```python
+scan = frags.scan_locus_pillars("chr1:1940-2060", min_len_bins=2)
+print(scan)
+print(scan.motifs[["chrom", "start", "end", "center", "width"]].to_string(index=False))
+
+# Instant re-thresholding without re-scanning fragments:
+scan_strict = scan.call(min_protection_score=2.5)
+print("strict calls:", len(scan_strict.motifs))
+
+# Export chrom, start, end DataFrames for pygenomic_tracks:
+track_df = scan.to_track_df("protection_score", bin_size=10)
+print(track_df[["chrom", "start", "end"]].head(2).to_string(index=False))
+```
+
+```text
+LocusPillarScan(chr1:1940-2060, n_pillars=0, n_motifs=1)
+chrom  start  end  center  width
+ chr1   1986 2014    2000     28
+strict calls: 0
+chrom  start  end
+ chr1   1940 1950
+ chr1   1950 1960
+```
+

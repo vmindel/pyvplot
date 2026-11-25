@@ -7,7 +7,7 @@ pyvplot summarises paired-end fragments around genomic anchors (motif hits, TSSs
 ## What it does
 
 - **V-plots and differential V-plots**: fragment counts by length and position relative to the anchor, with normalisations that put short TF-sized fragments on the same scale as nucleosomes, and log2 fold change between conditions.
-- **Footprints**: base-resolution cleavage profiles split by fragment end, and a per-anchor protection score from centre and flank cut density.
+- **Footprints**: base-resolution cleavage profiles split by fragment end, a per-anchor protection score from centre and flank cut density, and de-novo scanning of multi-length cut pillars and protected motif footprints (`scan_locus_pillars`, `scan_genome_pillars`).
 - **Size-selected matrices**: anchors × bins for one fragment class (`len_range="tf"`), with a built-in heatmap (`mat.plot()`) and plain array export for clustering.
 - **QC and phasing**: insert-size distribution, size-class fractions, FRiP, phasogram and nucleosome repeat length.
 - **Tracks**: size-selected midpoint, cut or coverage tracks to bedGraph, BigWig or a misha database (via `pymisha`).

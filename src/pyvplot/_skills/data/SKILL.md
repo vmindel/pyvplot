@@ -15,7 +15,7 @@ Read only the topic reference file needed for the task:
 |---|---|
 | **Ingesting BAM / BED / `.frag.tsv.gz` / BEDPE**, caching `.npz`/`.parquet`, deduplication, filtering, merging | `references/store-ingestion.md` |
 | **V-plots & differential V-plots**, CPM / expected background normalization, 2D smoothing, `plotnine` / `matplotlib`, faceted `VPlotCollection` | `references/vplots.md` |
-| **Size-stratified matrices**, per-anchor heatmaps (`mat.plot()`), 1-bp cut-site footprints (`+`/`-`), motif `footprint_score` | `references/matrices-footprints.md` |
+| **Size-stratified matrices**, per-anchor heatmaps (`mat.plot()`), 1-bp cut-site footprints (`+`/`-`), motif `footprint_score`, de-novo cut-pillar & motif scanning (`scan_locus_pillars`, `scan_genome_pillars`) | `references/matrices-footprints.md` |
 | **Assay presets & coordinate geometry**, Tn5 `+4/-5` shift, 5'->3' strand flipping, ChIP-exo, asymmetric windows, anchor tables | `references/assays-coordinates.md` |
 | **Fragment QC & nucleosome phasing**: insert-size histograms, FRiP, phasograms, NRL (peak fit + FFT), `qc_summary` | `references/qc-phasing.md` |
 | **K-mer cleavage bias correction**, naked-DNA control normalization, exporting `bedGraph` / `BigWig` / `pymisha` tracks | `references/bias-export.md` |

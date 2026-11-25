@@ -83,6 +83,25 @@ Returned DataFrame is indexed by `region_index` with columns:
 - `footprint_depth`: `center_density - flank_density` (**more negative = deeper protection dip**)
 - `accessibility`: combined per-bp density across center + flanks.
 
+## De-Novo Cut Pillars & Continuous 1-bp Protection Scanning
+
+```python
+# 1. Single-locus continuous 1-bp multi-length pillar & protection profiles + called BED intervals
+scan = frags.scan_locus_pillars("chr1:10000-10600", flank_mode="both")   # or vp.scan_locus_pillars(frags, ...)
+fig, axes = scan.plot()                                                  # standalone 5-panel QC plot
+fig, ax = scan.plot(ax=ax, what="protection", show_motifs=True)          # or draw directly into one axis
+
+# 2. Instant re-thresholding without re-scanning fragments
+scan_relaxed = scan.call(min_protection_score=0.35, min_motif_prominence=0.10, min_motif_distance=8)
+
+# 3. Export chrom, start, end DataFrames ready for pygenomic_tracks
+tracks = scan.to_pygenomic_tracks(bin_size=1)   # dict: protection_score, pillar_score, tf_coverage, cuts, pillars, motifs
+prot_df = scan.to_track_df("protection_score", bin_size=1, drop_zeros=False)
+
+# 4. Fast whole-genome active-window scan
+motifs_df, pillars_df = frags.scan_genome_pillars(return_pillars=True)   # or vp.scan_genome_pillars(frags, ...)
+```
+
 ## Footguns
 
 - **Sign conventions on `footprint_score`:** `protection_score` is positive when the motif center is protected (`flank > center`), while `footprint_depth` is negative when the motif center dips below the flanks. Check which sign your downstream sort or `BarTrack` expects.
