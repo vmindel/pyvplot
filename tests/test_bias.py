@@ -348,7 +348,7 @@ def test_correct_matrix_rejects_anchors_that_do_not_match_rows():
 @pytest.mark.parametrize("k", [5, 6])
 @pytest.mark.parametrize("width", [20, 19])
 @pytest.mark.parametrize("strand", ["+", "-"])
-def test_extract_anchor_sequences_stranded_chip_exo_aligns_kmers(width, strand, k, orient):
+def test_extract_anchor_sequences_aligns_kmers_for_stranded_chip_exo(width, strand, k, orient):
     import pandas as pd
 
     import pyvplot as vp
@@ -360,7 +360,7 @@ def test_extract_anchor_sequences_stranded_chip_exo_aligns_kmers(width, strand, 
     up, dn = 20, 30
     anchors = pd.DataFrame({"chrom": ["chr1"], "start": [1490], "end": [1490 + width], "strand": [strand]})
     seqs = vp.extract_anchor_sequences(
-        anchors, {"chr1": g}, upstream=up, downstream=dn, k=k, orient=orient, stranded=True
+        anchors, {"chr1": g}, upstream=up, downstream=dn, k=k, orient=orient
     )
     strands = None if orient else [strand]
     for feat, p in [(f, q) for f in ("cuts_plus", "cuts_minus") for q in (1482, 1495, 1508, 1517)]:
