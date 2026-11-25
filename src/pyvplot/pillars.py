@@ -16,7 +16,7 @@ bedGraph/BED export, or downstream sequence analysis with ``moodspy``.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -286,6 +286,16 @@ def _refine_pillar_positions(peaks: np.ndarray, cuts: np.ndarray, half_pw: int) 
     return np.unique(out)
 
 
+def _relative_expected(expected_cuts: Any, W: int) -> np.ndarray:
+    """Validate ``expected_cuts`` and rescale it to mean 1 (clamped at 0.1), so any scale works."""
+    exp_arr = np.asarray(expected_cuts, dtype=np.float64)
+    if exp_arr.shape != (W,):
+        raise ValueError(f"`expected_cuts` must have one value per bp of the window ({W}), got shape {exp_arr.shape}.")
+    if not np.all(np.isfinite(exp_arr)) or np.any(exp_arr < 0.0) or not np.any(exp_arr > 0.0):
+        raise ValueError("`expected_cuts` must be finite, non-negative and not all zero.")
+    return np.maximum(0.1, exp_arr / float(np.mean(exp_arr)))
+
+
 def _compute_cov_weight(cov_tf: np.ndarray) -> np.ndarray:
     """Smooth local coverage weighting in [0, 1] using a 301-bp local peak envelope."""
     if len(cov_tf) == 0:
@@ -315,7 +325,7 @@ def _call_intervals_from_arrays(
     min_pillar_prominence: float = 2.0,
     min_pillar_distance: int = 5,
     min_protection_score: float = 0.75,
-    min_motif_prominence: float = 0.20,
+    min_raw_protection: float = 0.20,
     min_motif_distance: int = 12,
     expected_cuts: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -383,19 +393,17 @@ def _call_intervals_from_arrays(
         )
 
     # Pair-based motif calling: score every pair (l_p, r_p) of called pillars with
-    # width = r_p - l_p in motif_width_range (with 1-bp jitter tolerance on each boundary).
+    # width = r_p - l_p in motif_width_range (inclusive).
     if cov_weight is None:
         cov_weight = _compute_cov_weight(cov_tf)
 
-    # Optional sequence-expected cleavage normalization hook (e.g. from KmerBiasTable)
     eff_ps = pillar_score
-    if expected_cuts is not None and len(expected_cuts) == W:
-        exp_arr = np.maximum(0.1, np.asarray(expected_cuts, dtype=np.float64))
-        eff_ps = pillar_score / (exp_arr / float(np.mean(exp_arr)))
+    if expected_cuts is not None:
+        eff_ps = pillar_score / _relative_expected(expected_cuts, W)
 
     ps_pad = np.concatenate([[0.0], np.cumsum(eff_ps)])
-    min_w = max(4, int(motif_width_range[0]) - 2)
-    max_w = int(motif_width_range[1]) + 2
+    min_w = max(4, int(motif_width_range[0]))
+    max_w = int(motif_width_range[1])
     pc = float(pseudocount)
     edge_trim = max(3, half_pw + 1)
 
@@ -438,7 +446,7 @@ def _call_intervals_from_arrays(
                 f_paired = (max(0.0, f_min) ** 0.45) * (max(0.0, f_max) ** 0.55)
 
             raw_prot = float(np.log2((f_paired + pc) / (c_eff + pc)))
-            if raw_prot < min_motif_prominence:
+            if raw_prot < min_raw_protection:
                 continue
 
             mid = (lp + rp) // 2
@@ -536,6 +544,13 @@ class LocusPillarScan:
     for direct compatibility with ``pygenomic_tracks``, bedGraph/BED export, and ``moodspy``.
     Called motifs correspond to intervals ``[l, r)`` between pairs of called cut pillars at
     genomic boundaries ``l`` and ``r``.
+
+    ``protection_score``, ``raw_log2_protection``, ``protection_2d`` and ``best_widths`` are an
+    exploratory sliding-window profile (core depletion against the strongest cuts
+    ``width / 2 +- flank_pad`` bp away, at every position and every ``footprint_widths``).
+    They are not what ``.motifs`` are called from: motifs are scored only between pairs of
+    called pillars, so a profile peak need not be called and a call need not sit on a peak.
+    ``footprint_widths`` and ``flank_pad`` shape this profile only.
     """
 
     chrom: str
@@ -559,6 +574,7 @@ class LocusPillarScan:
     pillars: pd.DataFrame
     motifs: pd.DataFrame
     metadata: dict[str, Any] = field(default_factory=dict)
+    expected_cuts: np.ndarray | None = None
 
     def __repr__(self) -> str:
         return (
@@ -570,7 +586,7 @@ class LocusPillarScan:
         self,
         *,
         min_protection_score: float | None = None,
-        min_motif_prominence: float | None = None,
+        min_raw_protection: float | None = None,
         min_motif_distance: int | None = None,
         min_pillar_score: float | None = None,
         min_len_bins: int | None = None,
@@ -586,7 +602,7 @@ class LocusPillarScan:
         min_protection_score:
             Minimum pair protection score to call a candidate motif ``[l, r)``
             (defaults to the value used when creating this scan, ``0.75``).
-        min_motif_prominence:
+        min_raw_protection:
             Minimum unweighted ``log2((flank + pc) / (core + pc))`` depletion required
             between a pair of flanking pillars (default ``0.20``).
         min_motif_distance:
@@ -600,9 +616,10 @@ class LocusPillarScan:
         min_pillar_distance:
             Minimum distance (bp) between called cut pillars (default ``5``).
         expected_cuts:
-            Optional 1-bp relative sequence-expected cleavage rate array of length ``end - start``
-            (e.g. from [`KmerBiasTable`][pyvplot.KmerBiasTable]) used to normalize ``pillar_score``
-            against local sequence cleavage preference before scoring core depletion.
+            Per-bp sequence-expected cleavage rate of length ``end - start`` (any scale; it is
+            rescaled to mean 1), e.g. from [`KmerBiasTable`][pyvplot.KmerBiasTable], dividing
+            ``pillar_score`` before pillar pairs are scored. Defaults to the array this scan was
+            built with.
 
         Returns
         -------
@@ -616,9 +633,9 @@ class LocusPillarScan:
             else min_protection_score
         )
         mp_prom = float(
-            self.metadata.get("min_motif_prominence", 0.20)
-            if min_motif_prominence is None
-            else min_motif_prominence
+            self.metadata.get("min_raw_protection", 0.20)
+            if min_raw_protection is None
+            else min_raw_protection
         )
         mp_dist = int(
             self.metadata.get("min_motif_distance", 12)
@@ -644,6 +661,7 @@ class LocusPillarScan:
         motif_width_range = tuple(self.metadata.get("motif_width_range", (10, 24)))
         flank_mode = str(self.metadata.get("flank_mode", "both"))
         pseudocount = float(self.metadata.get("pseudocount", 2.0))
+        exp = self.expected_cuts if expected_cuts is None else np.asarray(expected_cuts, dtype=np.float64)
 
         pillars_df, motifs_df = _call_intervals_from_arrays(
             chrom=self.chrom,
@@ -663,22 +681,22 @@ class LocusPillarScan:
             min_pillar_prominence=pp_prom,
             min_pillar_distance=min_pillar_distance,
             min_protection_score=mp_score,
-            min_motif_prominence=mp_prom,
+            min_raw_protection=mp_prom,
             min_motif_distance=mp_dist,
-            expected_cuts=expected_cuts,
+            expected_cuts=exp,
         )
         new_meta = dict(self.metadata)
         new_meta.update(
             {
                 "min_protection_score": mp_score,
-                "min_motif_prominence": mp_prom,
+                "min_raw_protection": mp_prom,
                 "min_motif_distance": mp_dist,
                 "min_pillar_score": pp_score,
                 "min_len_bins": pp_bins,
                 "min_pillar_prominence": pp_prom,
             }
         )
-        return replace(self, pillars=pillars_df, motifs=motifs_df, metadata=new_meta)
+        return replace(self, pillars=pillars_df, motifs=motifs_df, metadata=new_meta, expected_cuts=exp)
 
     def to_track_df(
         self,
@@ -1150,17 +1168,25 @@ def scan_locus_pillars(
     min_len_bins: int = 4,
     min_pillar_prominence: float = 2.0,
     min_protection_score: float = 0.75,
-    min_motif_prominence: float = 0.20,
+    min_raw_protection: float = 0.20,
     min_motif_distance: int = 12,
     expected_cuts: np.ndarray | None = None,
 ) -> LocusPillarScan:
     """Compute continuous 1D/2D cleavage-pillar and footprint-protection profiles and call
     cut pillars and pair-bracketed protected motifs ``[l, r)`` in a genomic window.
 
-    Note: for assays with sequence-dependent endonuclease bias (e.g. MNase prefers AT-rich
-    DNA so a GC-rich core between AT-rich flanks can appear protected), pass per-base
-    ``expected_cuts`` (from [`KmerBiasTable`][pyvplot.KmerBiasTable]) or calibrate
-    ``min_protection_score`` against a free-MNase / naked-DNA control store.
+    Pillars are detected on ``pillar_score`` and placed on their unsmoothed cut stacks.
+    Motifs are scored only between pairs of called pillars ``r - l`` apart, with ``r - l`` in
+    ``motif_width_range`` (inclusive): ``min_raw_protection`` is the minimum unweighted
+    ``log2((flank + pseudocount) / (core + pseudocount))`` of a pair and
+    ``min_protection_score`` the minimum after TF-coverage weighting.
+    ``footprint_widths`` and ``flank_pad`` only shape the exploratory ``protection_score``
+    profile (see [`LocusPillarScan`][pyvplot.LocusPillarScan]).
+
+    For assays with sequence-dependent endonuclease bias (MNase prefers AT-rich DNA, so a
+    GC-rich core between AT-rich flanks can look protected), pass per-bp ``expected_cuts``
+    of length ``end - start`` (any scale, e.g. from [`KmerBiasTable`][pyvplot.KmerBiasTable]),
+    or calibrate ``min_protection_score`` against a free-MNase / naked-DNA control store.
     """
     if store.is_stranded:
         raise ValueError("scan_locus_pillars requires paired-end fragment intervals; store is stranded.")
@@ -1180,6 +1206,9 @@ def scan_locus_pillars(
             raise ValueError("`footprint_widths` must contain integers >= 4.")
 
     W = R - L
+    exp = None if expected_cuts is None else np.asarray(expected_cuts, dtype=np.float64)
+    if exp is not None:
+        _relative_expected(exp, W)
     if chrom in store.starts and len(store.starts[chrom]) > 0:
         s_all = store.starts[chrom]
         e_all = store.ends[chrom]
@@ -1279,9 +1308,9 @@ def scan_locus_pillars(
         min_pillar_prominence=float(min_pillar_prominence),
         min_pillar_distance=5,
         min_protection_score=float(min_protection_score),
-        min_motif_prominence=float(min_motif_prominence),
+        min_raw_protection=float(min_raw_protection),
         min_motif_distance=int(min_motif_distance),
-        expected_cuts=expected_cuts,
+        expected_cuts=exp,
     )
 
     n_bins = cut_mat.shape[0]
@@ -1320,9 +1349,10 @@ def scan_locus_pillars(
             "min_len_bins": int(min_len_bins),
             "min_pillar_prominence": float(min_pillar_prominence),
             "min_protection_score": float(min_protection_score),
-            "min_motif_prominence": float(min_motif_prominence),
+            "min_raw_protection": float(min_raw_protection),
             "min_motif_distance": int(min_motif_distance),
         },
+        expected_cuts=exp,
     )
 
 
@@ -1378,9 +1408,7 @@ def scan_genome_pillars(
     len_bin: int = 10,
     tf_len_range: tuple[int, int] = (20, 120),
     pillar_window: int = 3,
-    footprint_widths: Sequence[int] | np.ndarray | None = None,
     motif_width_range: tuple[int, int] = (10, 24),
-    flank_pad: int = 2,
     min_bin_frags: int = 12,
     flank_mode: str = "both",
     pseudocount: float = 2.0,
@@ -1388,8 +1416,9 @@ def scan_genome_pillars(
     min_len_bins: int = 4,
     min_pillar_prominence: float = 2.0,
     min_protection_score: float = 0.75,
-    min_motif_prominence: float = 0.20,
+    min_raw_protection: float = 0.20,
     min_motif_distance: int = 12,
+    expected_cuts: Callable[[str, int, int], np.ndarray] | None = None,
     return_pillars: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """Scan active regions across the whole genome (or selected chromosomes) for de-novo
@@ -1399,6 +1428,11 @@ def scan_genome_pillars(
     (accelerated by Numba when installed) and shared pair-based calling as
     [`scan_locus_pillars`][pyvplot.scan_locus_pillars], so Numba and pure-Python backends
     produce identical intervals without fixed-size buffer truncation.
+
+    ``expected_cuts`` is called as ``expected_cuts(chrom, start, end)`` for each active window
+    and must return ``end - start`` per-bp sequence-expected cleavage rates (any scale), the
+    same as ``scan_locus_pillars(expected_cuts=...)`` for that window. A callable, because
+    a genome-length array would not fit in memory.
     """
     if store.is_stranded:
         raise ValueError("scan_genome_pillars requires paired-end fragment intervals; store is stranded.")
@@ -1407,11 +1441,6 @@ def scan_genome_pillars(
     min_len, max_len = int(len_range[0]), int(len_range[1])
     if max_len <= min_len or len_bin <= 0:
         raise ValueError("`len_range` must have max_len > min_len and `len_bin` > 0.")
-
-    if footprint_widths is not None:
-        widths = np.asarray(list(footprint_widths), dtype=np.int32)
-        if len(widths) == 0 or np.any(widths < 4):
-            raise ValueError("`footprint_widths` must contain integers >= 4.")
 
     target_chroms = list(store.chroms) if chroms is None else [c for c in store.chroms if c in set(chroms)]
     motif_frames: list[pd.DataFrame] = []
@@ -1467,8 +1496,9 @@ def scan_genome_pillars(
                 min_pillar_prominence=float(min_pillar_prominence),
                 min_pillar_distance=5,
                 min_protection_score=float(min_protection_score),
-                min_motif_prominence=float(min_motif_prominence),
+                min_raw_protection=float(min_raw_protection),
                 min_motif_distance=int(min_motif_distance),
+                expected_cuts=None if expected_cuts is None else expected_cuts(chrom, int(w0), int(w1)),
             )
             if len(m_df) > 0:
                 motif_frames.append(m_df)
