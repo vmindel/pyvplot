@@ -41,6 +41,7 @@ almost no context until it's used.
 | `references/store-ingestion.md` | BAM (`read1`/`mate`), progress and `ingest_stats`, BED/`.frag.tsv.gz`/BEDPE, `.npz`/`.parquet` caches, dedup, filtering, merging |
 | `references/vplots.md` | `vplot()`, CPM & expected/background normalization, smoothing, `diff()`, `VPlotCollection` |
 | `references/matrices-footprints.md` | `to_matrix()`, per-anchor heatmaps, 1-bp `+`/`-` cut footprints, `footprint_score()` |
+| `references/pillar-scanning.md` | De-novo footprint calling from cut pillars, `pillar_expected_cuts` bias correction, threshold calibration on a control |
 | `references/assays-coordinates.md` | Assay presets, `+4/-5` Tn5 shift, 5'→3' strand flipping, ChIP-exo, asymmetric windows |
 | `references/qc-phasing.md` | Insert-size distribution, FRiP, nucleosome phasogram, NRL estimation, `qc_summary()` |
 | `references/bias-export.md` | `KmerBiasTable` bias modeling, correction from a genome FASTA (`correct_matrix`, `correct_footprint`, `extract_anchor_sequences`), control normalization, bedGraph / BigWig / `pymisha` |
