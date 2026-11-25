@@ -36,6 +36,7 @@ nav:
       - Your own data: tutorials/your-data.md
       - V-plots & differential V-plots: tutorials/vplots-and-diff.md
       - Matrices & cut-site footprints: tutorials/matrices-and-footprints.md
+      - De-novo footprints from cut pillars: tutorials/pillar-scanning.md
       - Fragment QC & nucleosome phasing: tutorials/qc-and-phasing.md
       - Cleavage bias & track export: tutorials/bias-and-export.md
   - Claude Code skill: claude-skill.md

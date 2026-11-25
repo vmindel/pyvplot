@@ -42,6 +42,7 @@ from pyvplot.matrices import (
 from pyvplot.pillars import (
     LocusPillarScan,
     find_active_windows,
+    pillar_expected_cuts,
     scan_genome_pillars,
     scan_locus_pillars,
 )
@@ -88,6 +89,7 @@ __all__ = [
     "normalize_anchors",
     "normalize_by_control",
     "phasogram",
+    "pillar_expected_cuts",
     "qc_summary",
     "register_assay",
     "resolve_len_range",

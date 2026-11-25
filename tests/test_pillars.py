@@ -398,3 +398,48 @@ def test_genome_expected_cuts_callable_matches_locus_scan_per_window():
     )
     with pytest.raises(ValueError, match="one value per bp"):
         store.scan_genome_pillars(expected_cuts=lambda c, s, e: np.ones(e - s + 1))
+
+
+@pytest.mark.parametrize("k,off", [(4, 2), (5, 2), (6, 3), (5, 0), (5, 4)])
+def test_pillar_expected_cuts_matches_hand_computed_kmer_weights(k, off, tmp_path):
+    """Boundary b: forward k-mer with base b at `off` (fragment starting at b) plus the reverse
+    complement k-mer with base b - 1 at `off` in the RC frame (fragment ending at b), the two
+    frames KmerBiasTable.from_cuts estimates. Out-of-chromosome bases score 1.0."""
+    from pyvplot.bias import reverse_complement
+
+    rng = np.random.default_rng(k * 10 + off)
+    g = "".join(rng.choice(list("ACGT"), 400))
+    table = vp.KmerBiasTable(k=k, weights=rng.uniform(0.2, 5.0, 4**k), cut_offset=off)
+
+    def w(kmer: str) -> float:
+        return table[kmer] if len(kmer) == k and "N" not in kmer else 1.0
+
+    padded = "N" * 20 + g + "N" * 20
+
+    def hand(b: int) -> float:
+        q = b + 20
+        return w(padded[q - off : q - off + k]) + w(reverse_complement(padded[q - k + off : q + off]))
+
+    f = vp.pillar_expected_cuts(table, {"chr1": g})
+    for start, end in [(100, 160), (0, 30), (370, 400)]:
+        got = f("chr1", start, end)
+        assert got.shape == (end - start,)
+        interior = [b for b in range(start, end) if b - k >= 0 and b + k <= len(g)]
+        np.testing.assert_allclose(got[np.array(interior) - start], [hand(b) for b in interior])
+    fasta = tmp_path / "g.fa"
+    fasta.write_text(">chr1\n" + "\n".join(g[i : i + 60] for i in range(0, len(g), 60)) + "\n")
+    np.testing.assert_allclose(vp.pillar_expected_cuts(table, fasta)("chr1", 100, 160), f("chr1", 100, 160))
+    np.testing.assert_array_equal(f("chrX", 0, 10), np.full(10, 2.0))
+
+
+def test_pillar_expected_cuts_feeds_both_scans():
+    store = _single_footprint_store(5000, 5016)
+    rng = np.random.default_rng(2)
+    g = "".join(rng.choice(list("ACGT"), 20_000))
+    table = vp.KmerBiasTable(k=4, weights=rng.uniform(0.5, 2.0, 256))
+    f = vp.pillar_expected_cuts(table, {"chr1": g})
+    via_fn = store.scan_locus_pillars("chr1:4800-5200", expected_cuts=f)
+    via_arr = store.scan_locus_pillars("chr1:4800-5200", expected_cuts=f("chr1", 4800, 5200))
+    pd.testing.assert_frame_equal(via_fn.motifs, via_arr.motifs)
+    np.testing.assert_array_equal(via_fn.expected_cuts, f("chr1", 4800, 5200))
+    assert len(store.scan_genome_pillars(expected_cuts=f)) > 0

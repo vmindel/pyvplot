@@ -146,40 +146,6 @@ motif_bound            0.0       140.0              5.83             -2.8
 motif_unbound         20.0        60.0              0.25             -0.2
 ```
 
-## De-novo cut pillars and continuous 1-bp protection scanning
+## De-novo footprints
 
-When motif coordinates are not known in advance, `scan_locus_pillars()` (for a single window) and `scan_genome_pillars()` (genome-wide) identify bound motifs directly from paired-end cleavage geometry. At a bound motif flank, cuts pile up within a few base pairs across many distinct fragment lengths (**cut pillars**), whereas the motif core is a cleavage trough spanned by short TF fragments.
-
-`scan_locus_pillars()` computes:
-
-- `pillar_score`: continuous 1-bp multi-length cut-pillar score $\sum_b \log_2(1 + c_{b,\text{3bp}}(x))$ across 10-bp fragment-length bins (where index $p$ is the cleavage boundary at genomic coordinate $L + p$);
-- `protection_score`: unthresholded, signed continuous 1-bp protection score (positive inside protected troughs where flanking cut pillars exceed the core; negative on top of cut pillars), weighted smoothly by short-fragment spanning coverage. It is an exploratory profile for plotting and tracks: motifs are not called from it, so its peaks and the calls need not coincide;
-- `pillars` and `motifs`: discrete `chrom, start, end` BED DataFrames. Candidate motifs are called as pairs `(l, r)` of called cut pillars with `r - l` in `motif_width_range` (inclusive) scored by core depletion between them, yielding exact `[l, r)` protected intervals. Pillars are placed on their unsmoothed cut stacks. `min_raw_protection` is the minimum unweighted `log2((flank + pseudocount) / (core + pseudocount))` of a pair, `min_protection_score` the minimum after coverage weighting. For assays with strong sequence preference (such as MNase on AT-rich DNA), pass `expected_cuts=` (from [`KmerBiasTable`](../api/bias.md)) or calibrate thresholds on a naked-DNA / free-MNase control. `scan_genome_pillars(expected_cuts=...)` takes a function `(chrom, start, end) -> array` called once per active window.
-
-Use `scan.call(...)` to re-threshold `.motifs` and `.pillars` instantaneously without re-scanning fragments, `scan.to_track_df(...)` / `scan.to_pygenomic_tracks()` to export `chrom, start, end` DataFrames for `pygenomic_tracks`, and `scan.plot(ax=ax)` to draw the continuous 1-bp protection track into an existing figure axis (or `scan.plot()` for a standalone multi-panel QC figure).
-
-```python
-scan = frags.scan_locus_pillars("chr1:1940-2060", min_len_bins=2, min_pillar_score=4.0)
-print(scan)
-print(scan.motifs[["chrom", "start", "end", "center", "width"]].to_string(index=False))
-
-# Instant re-thresholding without re-scanning fragments:
-scan_strict = scan.call(min_protection_score=2.5)
-print("strict calls:", len(scan_strict.motifs))
-
-# Export chrom, start, end DataFrames for pygenomic_tracks:
-track_df = scan.to_track_df("protection_score", bin_size=10)
-print(track_df[["chrom", "start", "end"]].head(2).to_string(index=False))
-```
-
-```text
-LocusPillarScan(chr1:1940-2060, n_pillars=5, n_motifs=0)
-Empty DataFrame
-Columns: [chrom, start, end, center, width]
-Index: []
-strict calls: 0
-chrom  start  end
- chr1   1940 1950
- chr1   1950 1960
-```
-
+`footprint_score()` needs the motif positions. To call bound sites without them, from where fragment ends of many lengths pile up, see [De-novo footprints from cut pillars](pillar-scanning.md).

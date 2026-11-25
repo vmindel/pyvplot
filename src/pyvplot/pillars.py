@@ -27,6 +27,7 @@ from pyvplot.extract import HAS_NUMBA
 from pyvplot.locus import _parse_region
 
 if TYPE_CHECKING:
+    from pyvplot.bias import KmerBiasTable
     from pyvplot.store import FragmentStore
 
 if HAS_NUMBA:
@@ -1170,7 +1171,7 @@ def scan_locus_pillars(
     min_protection_score: float = 0.75,
     min_raw_protection: float = 0.20,
     min_motif_distance: int = 12,
-    expected_cuts: np.ndarray | None = None,
+    expected_cuts: np.ndarray | Callable[[str, int, int], np.ndarray] | None = None,
 ) -> LocusPillarScan:
     """Compute continuous 1D/2D cleavage-pillar and footprint-protection profiles and call
     cut pillars and pair-bracketed protected motifs ``[l, r)`` in a genomic window.
@@ -1185,8 +1186,10 @@ def scan_locus_pillars(
 
     For assays with sequence-dependent endonuclease bias (MNase prefers AT-rich DNA, so a
     GC-rich core between AT-rich flanks can look protected), pass per-bp ``expected_cuts``
-    of length ``end - start`` (any scale, e.g. from [`KmerBiasTable`][pyvplot.KmerBiasTable]),
-    or calibrate ``min_protection_score`` against a free-MNase / naked-DNA control store.
+    of length ``end - start`` (any scale), or a function ``(chrom, start, end) -> array`` such
+    as the one [`pillar_expected_cuts`][pyvplot.pillar_expected_cuts] builds from a
+    [`KmerBiasTable`][pyvplot.KmerBiasTable], and calibrate ``min_protection_score`` against a
+    free-MNase / naked-DNA control store.
     """
     if store.is_stranded:
         raise ValueError("scan_locus_pillars requires paired-end fragment intervals; store is stranded.")
@@ -1206,6 +1209,8 @@ def scan_locus_pillars(
             raise ValueError("`footprint_widths` must contain integers >= 4.")
 
     W = R - L
+    if callable(expected_cuts):
+        expected_cuts = expected_cuts(chrom, int(L), int(R))
     exp = None if expected_cuts is None else np.asarray(expected_cuts, dtype=np.float64)
     if exp is not None:
         _relative_expected(exp, W)
@@ -1354,6 +1359,44 @@ def scan_locus_pillars(
         },
         expected_cuts=exp,
     )
+
+
+def pillar_expected_cuts(table: KmerBiasTable, sequences: Any) -> Callable[[str, int, int], np.ndarray]:
+    """Sequence-expected cut rate at every boundary of a window, for ``expected_cuts=``.
+
+    Returns ``f(chrom, start, end)`` giving, for each boundary ``b`` in ``[start, end)``, the
+    k-mer propensity of a fragment starting at ``b`` (forward strand, cut before base ``b``)
+    plus that of a fragment ending at ``b`` (reverse strand, cut after base ``b - 1``), the
+    same two frames [`KmerBiasTable.from_cuts`][pyvplot.KmerBiasTable.from_cuts] estimates.
+    Pass ``f`` to ``scan_genome_pillars(expected_cuts=f)`` or ``scan_locus_pillars(expected_cuts=f)``.
+
+    Parameters
+    ----------
+    table:
+        K-mer cleavage bias table, ideally estimated with ``KmerBiasTable.from_cuts`` on a
+        naked-DNA or free-MNase control digested with the same enzyme.
+    sequences:
+        Genome: FASTA path (plain or ``.gz``), ``pysam.FastaFile``, ``pyfaidx.Fasta`` or
+        ``{chrom: str}`` dict. Bases outside the chromosome, ``N`` and missing chromosomes
+        score the neutral weight ``1.0``.
+    """
+    from pyvplot.bias import _fetch_subseq, _open_genome
+
+    genome = _open_genome(sequences)
+    cache: dict[str, str | None] = {}
+    k, off = int(table.k), int(table.cut_offset)
+    # Boundary b: the forward k-mer spans [b - off, b - off + k), the reverse one [b - k + off, b + off).
+    pad_l = max(off, k - off)
+    pad_r = max(k - 1 - off, off - 1)
+
+    def expected(chrom: str, start: int, end: int) -> np.ndarray:
+        w = int(end) - int(start)
+        seq = _fetch_subseq(genome, cache, chrom, int(start) - pad_l, int(end) + pad_r)
+        fwd = table.score_sequence(seq)[pad_l : pad_l + w]
+        rev = table.score_sequence_reverse(seq)[pad_l : pad_l + w]
+        return fwd + rev
+
+    return expected
 
 
 def find_active_windows(

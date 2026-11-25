@@ -1587,7 +1587,7 @@ class FragmentStore:
         min_protection_score: float = 0.75,
         min_raw_protection: float = 0.20,
         min_motif_distance: int = 12,
-        expected_cuts: np.ndarray | None = None,
+        expected_cuts: np.ndarray | Callable[[str, int, int], np.ndarray] | None = None,
     ) -> LocusPillarScan:
         """Scan one window for multi-length cut pillars and protected motifs. Same as [`pyvplot.scan_locus_pillars`][pyvplot.scan_locus_pillars]."""
         from pyvplot.pillars import scan_locus_pillars
