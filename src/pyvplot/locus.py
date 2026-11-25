@@ -233,7 +233,9 @@ def locus_vplot(
         with a motif, ``"genomic"`` without.
     orient:
         With ``coords="relative"``, flip the axis for a ``-`` strand motif so the motif
-        reads 5'->3' left to right, as in the aggregate plots.
+        reads 5'->3' left to right, as in the aggregate plots. It changes only the axis:
+        which fragment ends are selected and how they are labelled follow the motif's
+        strand either way.
 
     Returns
     -------

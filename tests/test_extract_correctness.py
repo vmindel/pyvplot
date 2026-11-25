@@ -305,10 +305,11 @@ def test_chip_exo_stranded_extraction_and_strand_flip():
     )
     anchor_p = pd.DataFrame({"chrom": ["chr1"], "center": [center], "strand": ["+"]})
 
-    # Reflected '-' motif: upstream read is genomic '-' at 1015, downstream is genomic '+' at 988
+    # Reflected '-' motif: reverse-complementing about c maps base x to base 2c - 1 - x, so the
+    # upstream read is genomic '-' at base 1014 and the downstream one genomic '+' at base 987.
     store_m = FragmentStore(
-        starts={"chr1": np.array([988, 1015], dtype=np.int32)},
-        ends={"chr1": np.array([989, 1016], dtype=np.int32)},
+        starts={"chr1": np.array([987, 1014], dtype=np.int32)},
+        ends={"chr1": np.array([988, 1015], dtype=np.int32)},
         strands={"chr1": np.array([1, -1], dtype=np.int8)},
         assay="chip_exo",
     )
@@ -346,3 +347,51 @@ def test_boundary_and_spanning_fragments():
     np.testing.assert_allclose(mat_np, ref, rtol=0, atol=1e-12)
     # Every bin in [-50, 50) must have >= 1.0 coverage from the spanning fragment [100, 900)
     assert np.all(mat_nb >= 1.0)
+
+
+@pytest.mark.parametrize("width", [10, 11])
+def test_stranded_minus_anchor_is_exact_mirror_of_plus_anchor(width):
+    """Reverse-complementing a stranded store about a motif must reproduce its '+' profile on '-'.
+
+    A 5' base x maps to base 2c - 1 - x with the opposite strand. Holds at integer (even width)
+    and half-integer (odd width) centres, for every cut feature, both backends, the V-plot and
+    the matrix, and extract_events' overlap_mode="cuts" window filter.
+    """
+    rng = np.random.default_rng(11)
+    lo = 1000
+    c = lo + width / 2
+    pos = rng.integers(lo - 60, lo + width + 60, 400).astype(np.int64)
+    st = rng.choice(np.array([1, -1], dtype=np.int8), 400)
+    mpos = (2 * c - 1 - pos).astype(np.int64)
+
+    def mk(p, s):
+        o = np.argsort(p, kind="stable")
+        return FragmentStore(
+            starts={"chr1": p[o].astype(np.int32)}, ends={"chr1": (p[o] + 1).astype(np.int32)},
+            strands={"chr1": s[o]}, assay="chip_exo",
+        )
+
+    store_p, store_m = mk(pos, st), mk(mpos, -st)
+    a_p = pd.DataFrame({"chrom": ["chr1"], "start": [lo], "end": [lo + width], "strand": ["+"]})
+    a_m = a_p.assign(strand="-")
+    backends = [False, True] if HAS_NUMBA else [False]
+    for feat in ("cuts", "cuts_plus", "cuts_minus"):
+        for nb in backends:
+            mp, _ = accumulate_matrix(store_p, a_p, upstream=40, downstream=45, bin_size=1, feature=feat, use_numba=nb)
+            mm, _ = accumulate_matrix(store_m, a_m, upstream=40, downstream=45, bin_size=1, feature=feat, use_numba=nb)
+            assert mp.sum() > 0
+            np.testing.assert_array_equal(mp, mm)
+            gp, _ = accumulate_vplot(store_p, a_p, upstream=40, downstream=45, min_len=1, max_len=2, feature=feat, use_numba=nb)
+            gm, _ = accumulate_vplot(store_m, a_m, upstream=40, downstream=45, min_len=1, max_len=2, feature=feat, use_numba=nb)
+            np.testing.assert_array_equal(gp, gm)
+
+    def ev(store, a):
+        out = extract_events(store, a, upstream=40, downstream=45, overlap_mode="cuts")
+        return np.sort(out["rel_left"].to_numpy()), np.sort(out["frag_strand"].to_numpy())
+
+    (rl_p, fs_p), (rl_m, fs_m) = ev(store_p, a_p), ev(store_m, a_m)
+    np.testing.assert_array_equal(rl_p, rl_m)
+    np.testing.assert_array_equal(fs_p, fs_m)
+    # cuts-mode events land in the same bins as the matrix
+    m_bins = np.flatnonzero(accumulate_matrix(store_m, a_m, upstream=40, downstream=45, bin_size=1, feature="cuts")[0][0])
+    assert set(np.floor(rl_m + 40).astype(int)) == set(m_bins)

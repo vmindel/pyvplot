@@ -435,7 +435,7 @@ def _vplot_range_kernel(
 
             elif feature_code == FEATURE_CUTS:
                 if has_strands:
-                    rel = (s - c) if a_st >= 0 else (c - s)
+                    rel = (s - c) if a_st >= 0 else (c - s - 1.0)
                     pi = int(math.floor((rel + upstream) * inv_pos_bin))
                     if 0 <= pi < n_pos:
                         out_grid[li, pi] += 1.0
@@ -456,7 +456,7 @@ def _vplot_range_kernel(
             elif feature_code == FEATURE_CUTS_PLUS:
                 if has_strands:
                     if frag_strands[j] * a_st > 0:
-                        rel = (s - c) if a_st >= 0 else (c - s)
+                        rel = (s - c) if a_st >= 0 else (c - s - 1.0)
                         pi = int(math.floor((rel + upstream) * inv_pos_bin))
                         if 0 <= pi < n_pos:
                             out_grid[li, pi] += 1.0
@@ -469,7 +469,7 @@ def _vplot_range_kernel(
             elif feature_code == FEATURE_CUTS_MINUS:
                 if has_strands:
                     if frag_strands[j] * a_st < 0:
-                        rel = (s - c) if a_st >= 0 else (c - s)
+                        rel = (s - c) if a_st >= 0 else (c - s - 1.0)
                         pi = int(math.floor((rel + upstream) * inv_pos_bin))
                         if 0 <= pi < n_pos:
                             out_grid[li, pi] += 1.0
@@ -620,7 +620,10 @@ def _matrix_parallel_kernel(
 
             elif feature_code == FEATURE_CUTS:
                 if has_strands:
-                    rel = (s - c) if a_st >= 0 else (c - s)
+                    # A stranded read is its 5' base [s, s + 1). Its position is the base's
+                    # leading edge in anchor orientation: s on '+' anchors, s + 1 on '-' anchors,
+                    # so a '-' anchor mirrors a '+' one exactly (base x <-> base 2c - 1 - x).
+                    rel = (s - c) if a_st >= 0 else (c - s - 1.0)
                     bi = int(math.floor((rel + upstream) * inv_bin))
                     if 0 <= bi < n_bins:
                         out_matrix[row, bi] += 1.0
@@ -641,7 +644,7 @@ def _matrix_parallel_kernel(
             elif feature_code == FEATURE_CUTS_PLUS:
                 if has_strands:
                     if frag_strands[j] * a_st > 0:
-                        rel = (s - c) if a_st >= 0 else (c - s)
+                        rel = (s - c) if a_st >= 0 else (c - s - 1.0)
                         bi = int(math.floor((rel + upstream) * inv_bin))
                         if 0 <= bi < n_bins:
                             out_matrix[row, bi] += 1.0
@@ -654,7 +657,7 @@ def _matrix_parallel_kernel(
             elif feature_code == FEATURE_CUTS_MINUS:
                 if has_strands:
                     if frag_strands[j] * a_st < 0:
-                        rel = (s - c) if a_st >= 0 else (c - s)
+                        rel = (s - c) if a_st >= 0 else (c - s - 1.0)
                         bi = int(math.floor((rel + upstream) * inv_bin))
                         if 0 <= bi < n_bins:
                             out_matrix[row, bi] += 1.0
@@ -779,7 +782,7 @@ def _vplot_chrom_numpy(
 
         elif feature_code == FEATURE_CUTS:
             if has_strands:
-                rel = (s - c) if a_st >= 0 else (c - s)
+                rel = (s - c) if a_st >= 0 else (c - s - 1.0)
                 pi = np.floor((rel + upstream) * inv_pos_bin).astype(np.int64)
                 ok = (pi >= 0) & (pi < n_pos)
                 if np.any(ok):
@@ -797,7 +800,7 @@ def _vplot_chrom_numpy(
             if has_strands and fst is not None:
                 mask = (fst * a_st) > 0
                 if np.any(mask):
-                    rel = (s[mask] - c) if a_st >= 0 else (c - s[mask])
+                    rel = (s[mask] - c) if a_st >= 0 else (c - s[mask] - 1.0)
                     pi = np.floor((rel + upstream) * inv_pos_bin).astype(np.int64)
                     ok = (pi >= 0) & (pi < n_pos)
                     if np.any(ok):
@@ -813,7 +816,7 @@ def _vplot_chrom_numpy(
             if has_strands and fst is not None:
                 mask = (fst * a_st) < 0
                 if np.any(mask):
-                    rel = (s[mask] - c) if a_st >= 0 else (c - s[mask])
+                    rel = (s[mask] - c) if a_st >= 0 else (c - s[mask] - 1.0)
                     pi = np.floor((rel + upstream) * inv_pos_bin).astype(np.int64)
                     ok = (pi >= 0) & (pi < n_pos)
                     if np.any(ok):
@@ -891,7 +894,7 @@ def _matrix_chrom_numpy(
 
         elif feature_code == FEATURE_CUTS:
             if has_strands:
-                rel = (s - c) if a_st >= 0 else (c - s)
+                rel = (s - c) if a_st >= 0 else (c - s - 1.0)
                 bi = np.floor((rel + upstream) * inv_bin).astype(np.int64)
                 ok = (bi >= 0) & (bi < n_bins)
                 if np.any(ok):
@@ -909,7 +912,7 @@ def _matrix_chrom_numpy(
             if has_strands and fst is not None:
                 mask = (fst * a_st) > 0
                 if np.any(mask):
-                    rel = (s[mask] - c) if a_st >= 0 else (c - s[mask])
+                    rel = (s[mask] - c) if a_st >= 0 else (c - s[mask] - 1.0)
                     bi = np.floor((rel + upstream) * inv_bin).astype(np.int64)
                     ok = (bi >= 0) & (bi < n_bins)
                     if np.any(ok):
@@ -925,7 +928,7 @@ def _matrix_chrom_numpy(
             if has_strands and fst is not None:
                 mask = (fst * a_st) < 0
                 if np.any(mask):
-                    rel = (s[mask] - c) if a_st >= 0 else (c - s[mask])
+                    rel = (s[mask] - c) if a_st >= 0 else (c - s[mask] - 1.0)
                     bi = np.floor((rel + upstream) * inv_bin).astype(np.int64)
                     ok = (bi >= 0) & (bi < n_bins)
                     if np.any(ok):
@@ -1348,8 +1351,9 @@ def extract_events(
                 keep = (r_right > -up) & (r_left < dn)
             else:  # cuts
                 if f_strands is not None:
-                    r_cut = (s_v - c) if a_st >= 0 else (c - s_v)
-                    keep = (r_cut >= -up) & (r_cut < dn)
+                    # A stranded read is its 5' base [s, s + 1); in anchor orientation its cut
+                    # is the base's leading edge, which rel_left already holds for both strands.
+                    keep = (r_left >= -up) & (r_left < dn)
                 else:
                     keep = ((r_left >= -up) & (r_left < dn)) | ((r_right >= -up) & (r_right < dn))
 
