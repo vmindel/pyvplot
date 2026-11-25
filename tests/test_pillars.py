@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import pyvplot as vp
 import pyvplot.pillars as pillars_mod
@@ -198,6 +199,9 @@ def test_truncation_regression_wide_active_window():
 
     assert len(motifs_nb) >= 2000
     assert int(motifs_nb["end"].max()) >= 69_900
+    # Every planted footprint comes back exactly: 1-bp cut stacks must not drift to a plateau edge.
+    planted = {(b, b + 16) for b in range(10_000, 70_000, 30)}
+    assert planted <= set(zip(motifs_nb["start"].tolist(), motifs_nb["end"].tolist(), strict=True))
     np.testing.assert_array_equal(
         motifs_nb[["start", "end", "center"]].to_numpy(),
         motifs_py[["start", "end", "center"]].to_numpy(),
@@ -267,3 +271,130 @@ def test_simulation_precision_recall_and_zero_boundary_offset():
     assert recall_count >= 108
     assert np.median(start_offs) == 0.0
     assert np.median(end_offs) == 0.0
+
+
+@pytest.mark.parametrize("jitter", [0, 1])
+def test_pillars_land_on_sharp_and_jittered_cut_stacks(jitter):
+    """pillar_score is box-filtered, so a 1-bp cut stack is a flat plateau whose peak position
+    background noise decides. Called pillars and motif edges must sit on the stack itself,
+    whether it is 1 bp wide or spread over +-1 bp, for every background realisation.
+    """
+    l_b, r_b = 5000, 5016
+    for seed in range(12):
+        rng = np.random.default_rng(seed)
+        starts, ends = [], []
+        for _ in range(3000):
+            s = int(rng.integers(4000, 6000))
+            starts.append(s)
+            ends.append(s + int(rng.integers(20, 250)))
+        for _ in range(80):
+            fl = int(rng.integers(25, 220))
+            starts.append(l_b - fl)
+            ends.append(l_b + int(rng.integers(-jitter, jitter + 1)))
+            s0 = r_b + int(rng.integers(-jitter, jitter + 1))
+            starts.append(s0)
+            ends.append(s0 + int(rng.integers(25, 220)))
+        for _ in range(40):
+            starts.append(l_b)
+            ends.append(r_b + int(rng.integers(20, 80)))
+        order = np.argsort(starts)
+        store = vp.FragmentStore.from_arrays(
+            {"chr1": np.array(starts)[order].astype(np.int32)},
+            {"chr1": np.array(ends)[order].astype(np.int32)},
+            assay="chec",
+        )
+        scan = store.scan_locus_pillars("chr1:4800-5200")
+        assert {l_b, r_b} <= set(scan.pillars["pos"].tolist()), seed
+        hits = scan.motifs[(scan.motifs["center"] - 5008).abs() < 8]
+        assert hits[["start", "end"]].values.tolist() == [[l_b, r_b]], seed
+
+
+def _single_footprint_store(l_b: int, r_b: int, seed: int = 3) -> vp.FragmentStore:
+    rng = np.random.default_rng(seed)
+    starts, ends = [], []
+    for _ in range(3000):
+        s = int(rng.integers(l_b - 1000, l_b + 1000))
+        starts.append(s)
+        ends.append(s + int(rng.integers(20, 250)))
+    for _ in range(80):
+        fl = int(rng.integers(25, 220))
+        starts.append(l_b - fl)
+        ends.append(l_b)
+        starts.append(r_b)
+        ends.append(r_b + int(rng.integers(25, 220)))
+    for _ in range(40):
+        starts.append(l_b)
+        ends.append(r_b + int(rng.integers(20, 80)))
+    order = np.argsort(starts)
+    return vp.FragmentStore.from_arrays(
+        {"chr1": np.array(starts)[order].astype(np.int32)},
+        {"chr1": np.array(ends)[order].astype(np.int32)},
+        assay="chec",
+    )
+
+
+def _called(scan_or_df, l_b, r_b):
+    m = scan_or_df.motifs if hasattr(scan_or_df, "motifs") else scan_or_df
+    return [l_b, r_b] in m[["start", "end"]].values.tolist()
+
+
+def test_motif_width_range_is_exact_and_inclusive():
+    store = _single_footprint_store(5000, 5025)  # r - l = 25
+    assert not _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(10, 24)), 5000, 5025)
+    assert _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(10, 25)), 5000, 5025)
+    store = _single_footprint_store(5000, 5010)  # lower bound, r - l = 10
+    assert _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(10, 24)), 5000, 5010)
+    assert not _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(11, 24)), 5000, 5010)
+
+
+def test_expected_cuts_scale_free_validated_and_kept_by_call():
+    store = _single_footprint_store(5000, 5016)
+    region, W = "chr1:4800-5200", 400
+    rng = np.random.default_rng(0)
+    exp = rng.uniform(0.5, 2.0, W)
+    a = store.scan_locus_pillars(region, expected_cuts=exp)
+    b = store.scan_locus_pillars(region, expected_cuts=exp * 1e-3)
+    pd.testing.assert_frame_equal(a.motifs, b.motifs)
+    # .call() reuses the scan's array unless given another
+    pd.testing.assert_frame_equal(a.call().motifs, a.motifs)
+    plain = store.scan_locus_pillars(region)
+    pd.testing.assert_frame_equal(plain.call(expected_cuts=exp).motifs, a.motifs)
+    # a core expected to be rarely cut explains the depletion away
+    gc_core = np.ones(W)
+    gc_core[5003 - 4800 : 5013 - 4800] = 0.15
+    hit = plain.motifs[(plain.motifs.start == 5000) & (plain.motifs.end == 5016)]
+    hit_bias = store.scan_locus_pillars(region, expected_cuts=gc_core).motifs
+    hit_bias = hit_bias[(hit_bias.start == 5000) & (hit_bias.end == 5016)]
+    assert len(hit) == 1
+    assert len(hit_bias) == 0
+    with pytest.raises(ValueError, match="one value per bp"):
+        store.scan_locus_pillars(region, expected_cuts=np.ones(W - 1))
+    with pytest.raises(ValueError, match="one value per bp"):
+        plain.call(expected_cuts=np.ones(W + 1))
+    with pytest.raises(ValueError, match="non-negative"):
+        store.scan_locus_pillars(region, expected_cuts=-np.ones(W))
+
+
+def test_genome_expected_cuts_callable_matches_locus_scan_per_window():
+    store = _single_footprint_store(5000, 5016)
+    rng = np.random.default_rng(1)
+    genome_exp = rng.uniform(0.5, 2.0, 20_000)
+    seen = []
+
+    def f(chrom, start, end):
+        seen.append((chrom, start, end))
+        return genome_exp[start:end]
+
+    motifs = store.scan_genome_pillars(expected_cuts=f)
+    wins = pillars_mod.find_active_windows(store.starts["chr1"], store.ends["chr1"])
+    assert seen == [("chr1", int(w0), int(w1)) for w0, w1 in wins]
+    per_window = pd.concat(
+        [store.scan_locus_pillars(("chr1", w0, w1), expected_cuts=genome_exp[w0:w1]).motifs for w0, w1 in wins],
+        ignore_index=True,
+    )
+    key = ["start", "end", "protection_score"]
+    pd.testing.assert_frame_equal(
+        motifs[key].sort_values(key).reset_index(drop=True), per_window[key].sort_values(key).reset_index(drop=True)
+    )
+    with pytest.raises(ValueError, match="one value per bp"):
+        store.scan_genome_pillars(expected_cuts=lambda c, s, e: np.ones(e - s + 1))

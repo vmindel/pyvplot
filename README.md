@@ -46,7 +46,7 @@ store.locus_vplot("chr1:7170-7970", motif="chr1:7560-7580:+", feature="cuts").pl
 scan = store.scan_locus_pillars("chr1:7170-7970")
 scan.plot()                                   # multi-panel QC or single-axis scan.plot(ax=ax)
 tracks = scan.to_pygenomic_tracks()           # dict of chrom, start, end DataFrames for pygenomic_tracks
-scan_relaxed = scan.call(min_protection_score=0.4, min_motif_prominence=0.1)  # instant re-thresholding
+scan_relaxed = scan.call(min_protection_score=0.4, min_raw_protection=0.1)  # instant re-thresholding
 genome_motifs = store.scan_genome_pillars()   # fast whole-genome de-novo scan
 
 # Mutant vs WT, log2 fold change after CPM.

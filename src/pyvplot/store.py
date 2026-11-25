@@ -7,7 +7,7 @@ import json
 import warnings
 from array import array
 from collections import defaultdict
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -1585,7 +1585,7 @@ class FragmentStore:
         min_len_bins: int = 4,
         min_pillar_prominence: float = 2.0,
         min_protection_score: float = 0.75,
-        min_motif_prominence: float = 0.20,
+        min_raw_protection: float = 0.20,
         min_motif_distance: int = 12,
         expected_cuts: np.ndarray | None = None,
     ) -> LocusPillarScan:
@@ -1608,7 +1608,7 @@ class FragmentStore:
             min_len_bins=min_len_bins,
             min_pillar_prominence=min_pillar_prominence,
             min_protection_score=min_protection_score,
-            min_motif_prominence=min_motif_prominence,
+            min_raw_protection=min_raw_protection,
             min_motif_distance=min_motif_distance,
             expected_cuts=expected_cuts,
         )
@@ -1621,9 +1621,7 @@ class FragmentStore:
         len_bin: int = 10,
         tf_len_range: tuple[int, int] = (20, 120),
         pillar_window: int = 3,
-        footprint_widths: Sequence[int] | np.ndarray | None = None,
         motif_width_range: tuple[int, int] = (10, 24),
-        flank_pad: int = 2,
         min_bin_frags: int = 12,
         flank_mode: str = "both",
         pseudocount: float = 2.0,
@@ -1631,8 +1629,9 @@ class FragmentStore:
         min_len_bins: int = 4,
         min_pillar_prominence: float = 2.0,
         min_protection_score: float = 0.75,
-        min_motif_prominence: float = 0.20,
+        min_raw_protection: float = 0.20,
         min_motif_distance: int = 12,
+        expected_cuts: Callable[[str, int, int], np.ndarray] | None = None,
         return_pillars: bool = False,
     ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
         """Scan active windows genome-wide for protected motifs and cut pillars. Same as [`pyvplot.scan_genome_pillars`][pyvplot.scan_genome_pillars]."""
@@ -1645,9 +1644,7 @@ class FragmentStore:
             len_bin=len_bin,
             tf_len_range=tf_len_range,
             pillar_window=pillar_window,
-            footprint_widths=footprint_widths,
             motif_width_range=motif_width_range,
-            flank_pad=flank_pad,
             min_bin_frags=min_bin_frags,
             flank_mode=flank_mode,
             pseudocount=pseudocount,
@@ -1655,8 +1652,9 @@ class FragmentStore:
             min_len_bins=min_len_bins,
             min_pillar_prominence=min_pillar_prominence,
             min_protection_score=min_protection_score,
-            min_motif_prominence=min_motif_prominence,
+            min_raw_protection=min_raw_protection,
             min_motif_distance=min_motif_distance,
+            expected_cuts=expected_cuts,
             return_pillars=return_pillars,
         )
 
