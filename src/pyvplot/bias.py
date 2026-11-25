@@ -189,7 +189,6 @@ def extract_anchor_sequences(
     k: int | None = None,
     cut_offset: int | None = None,
     orient: bool = True,
-    stranded: bool = False,
 ) -> list[str]:
     """Extract 5'->3' anchor-oriented DNA sequences from a genome FASTA or ``{chrom: seq}`` dict.
 
@@ -220,10 +219,6 @@ def extract_anchor_sequences(
         returned strings are already in 5'->3' anchor orientation. If ``False``,
         ``-`` anchors cover the same genomic window but are returned as the
         genomic ``+`` strand; pass ``strands=`` to ``correct_matrix`` to orient them.
-    stranded:
-        Set ``True`` for stranded single-end 5'-end stores (e.g. ChIP-exo), where
-        each read is stored at its 1-bp 5' base ``[s, s + 1)`` rather than a
-        paired-end fragment interval ``[start, end)``.
 
     Notes
     -----
@@ -232,9 +227,6 @@ def extract_anchor_sequences(
     first bin of a ``cuts_minus`` (or the right-end half of a ``cuts``) expectation
     keeps the neutral weight ``1.0``. For stranded 5'-end data the same happens to
     the last reverse-frame bin when ``k`` is even.
-
-    Call it with ``stranded=True`` for stranded stores when you pass the result to
-    ``correct_matrix`` yourself; ``correct_matrix(anchors=)`` does this for you.
     """
     up = int(flank if upstream is None else upstream)
     dn = int(flank if downstream is None else downstream)
@@ -265,9 +257,9 @@ def extract_anchor_sequences(
             sub = _fetch_subseq(genome, chrom_cache, chrom, g_start, g_start + width)
         else:
             # '-' anchors: bin floor(c - b + up), so bin 0 is boundary floor(c + up), and the
-            # window is read reverse-complemented. For stranded 5'-end stores b is a base index
-            # [b, b + 1) rather than a fragment right boundary, shifting the upper slice bound by +1.
-            g_end = int(np.floor(c + up)) + int(bool(stranded)) + pad_l
+            # window is read reverse-complemented. Stranded 5'-end reads sit at their base's
+            # leading edge (s + 1 on '-' anchors), the same boundary, so the window is shared.
+            g_end = int(np.floor(c + up)) + pad_l
             sub = _fetch_subseq(genome, chrom_cache, chrom, g_end - width, g_end)
             if orient:
                 sub = reverse_complement(sub)
@@ -644,7 +636,6 @@ class KmerBiasTable:
                 k=self.k,
                 cut_offset=self.cut_offset,
                 orient=True,
-                stranded=stranded,
             )
             strands = None
         else:
@@ -740,7 +731,6 @@ class KmerBiasTable:
                 k=self.k,
                 cut_offset=self.cut_offset,
                 orient=True,
-                stranded=_is_stranded_assay(m_ref.assay),
             )
             strands = None
         else:
