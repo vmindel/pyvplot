@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (occupancy track; bias tables with excluded regions)
+- `occupancy_profile(store, region, *, tf_len_range=(20, 120), inner=5, outer=60, background=(40, 150), score="llr")`: at each boundary `c`, the short fragments with start in `[c - outer, c - inner]` and end in `[c + inner, c + outer]` (they bracket the site), scored against their mean at `c ± background` as a signed Poisson LLR (`"log2"` and `"counts"` also available). Indexed like `pillar_score`. It does not need an uncut core, so it follows MNase's GC preference less than depletion does. On KLF5 ChEC-seq it ranked FiNeMo KLF hits above other positions within coverage × GC bins better than the protection profile (site AUROC 0.74 vs 0.69, held-out chromosomes), but with broad peaks.
+- `LocusPillarScan.occupancy_score` (computed by `scan_locus_pillars` with the scan's `tf_len_range`), an `occupancy_score` column in `.motifs` of both callers and of `scan_genome_pillars` (the track at each call's `center`; calls are unchanged), `to_track_df("occupancy_score")`, a `to_pygenomic_tracks()` entry and `plot(ax=ax, what="occupancy")`.
+- `KmerBiasTable.from_cuts(..., exclude=intervals)`: k-mers overlapping any excluded `chrom, start, end` interval are dropped from both the observed and the background counts, e.g. to fit a sample's own cuts away from its peaks and motif matches.
+- Docs: tutorial section on the occupancy track; the API page no longer says motifs are called from pillar pairs only.
+
 ### Changed (pillar scanner: calls are peaks of the protection profile)
 - `scan_locus_pillars`, `scan_genome_pillars`, their `FragmentStore` methods and `LocusPillarScan.call` take `caller="profile"` (new default) or `"pairs"`. The profile caller calls peaks of the 1-bp `protection_score` profile, each spanning its best width with both edges moved to the tallest `pillar_score` within `flank_pad`, so calls always sit on the profile; `"pairs"` is the previous pillar-pair caller, unchanged. On KLF5 ChEC-seq, scored against FiNeMo hits from a sequence model inside 64k ISM tiles, profile peaks had higher precision and recall than pillar pairs at every call density (29% / 34% at ~10 calls/kb against 22% / 20% at 7.7/kb). `min_protection_score` now defaults to `None`: 1.0 for `"profile"`, 0.75 for `"pairs"`.
 - `scan_genome_pillars` takes `footprint_widths` and `flank_pad`, and computes the profile per active window for the profile caller.

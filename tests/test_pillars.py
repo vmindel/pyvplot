@@ -524,3 +524,89 @@ def test_call_switches_caller_without_rescanning():
         store.scan_locus_pillars("chr1:1100-1400", caller="peaks")
     with pytest.raises(ValueError, match="caller"):
         store.scan_genome_pillars(caller="peaks")
+
+
+def _occupancy_brute(starts, ends, L, R, tf=(20, 120), inner=5, outer=60, bg=(40, 150)):
+    """Direct per-boundary count of bracketing fragments, and the mean count at c +- bg."""
+    s, e = np.asarray(starts, np.int64), np.asarray(ends, np.int64)
+    fl = e - s
+    k = (fl >= tf[0]) & (fl <= tf[1])
+    s, e = s[k], e[k]
+    lo = L - bg[1]
+    cnt = np.array(
+        [np.sum((s >= c - outer) & (s <= c - inner) & (e >= c + inner) & (e <= c + outer)) for c in range(lo, R + bg[1])],
+        dtype=float,
+    )
+    offs = np.r_[np.arange(-bg[1], -bg[0] + 1), np.arange(bg[0], bg[1] + 1)]
+    obs = np.array([cnt[c - lo] for c in range(L, R)])
+    exp = np.array([cnt[c - lo + offs].mean() for c in range(L, R)])
+    return obs, exp
+
+
+def _make_occupancy_store():
+    rng = np.random.default_rng(7)
+    s = rng.integers(0, 3000, size=4000)
+    e = s + rng.integers(15, 260, size=4000)
+    # a bound site at boundary 1500: short fragments with an end 5-40 bp to either side
+    s2 = 1500 - rng.integers(5, 40, size=300)
+    e2 = 1500 + rng.integers(5, 40, size=300)
+    starts, ends = np.r_[s, s2], np.r_[e, e2]
+    o = np.argsort(starts, kind="stable")
+    return vp.FragmentStore.from_arrays(
+        {"chr1": starts[o].astype(np.int32)}, {"chr1": ends[o].astype(np.int32)}, assay="chec"
+    )
+
+
+def test_occupancy_profile_matches_direct_count_and_peaks_at_site():
+    store = _make_occupancy_store()
+    L, R = 1300, 1700
+    obs, exp = _occupancy_brute(store.starts["chr1"], store.ends["chr1"], L, R)
+    counts = vp.occupancy_profile(store, f"chr1:{L}-{R}", score="counts")
+    np.testing.assert_array_equal(counts, obs)
+    llr = vp.occupancy_profile(store, ("chr1", L, R))
+    assert llr.shape == (R - L,)
+    np.testing.assert_allclose(llr, pillars_mod._signed_poisson_llr(obs, exp), rtol=1e-9, atol=1e-9)
+    np.testing.assert_allclose(
+        vp.occupancy_profile(store, ("chr1", L, R), score="log2"), np.log2((obs + 1) / (exp + 1)), rtol=1e-9
+    )
+    assert abs(int(np.argmax(llr)) + L - 1500) <= 3
+    assert llr.max() > 50
+    assert not vp.occupancy_profile(store, ("chr2", 0, 100)).any()
+    with pytest.raises(ValueError, match="inner"):
+        vp.occupancy_profile(store, ("chr1", L, R), inner=60, outer=60)
+    with pytest.raises(ValueError, match="score"):
+        vp.occupancy_profile(store, ("chr1", L, R), score="z")
+
+
+def test_scan_carries_occupancy_track_and_motif_column():
+    store = _make_synthetic_chec_store()
+    for caller in ("profile", "pairs"):
+        scan = store.scan_locus_pillars("chr1:1100-1400", caller=caller)
+        np.testing.assert_array_equal(scan.occupancy_score, vp.occupancy_profile(store, "chr1:1100-1400"))
+        m = scan.motifs
+        assert len(m) > 0
+        idx = np.floor(m["center"].to_numpy(dtype=float)).astype(np.int64) - scan.start
+        np.testing.assert_allclose(m["occupancy_score"].to_numpy(dtype=float), scan.occupancy_score[idx])
+        recalled = scan.call(caller="pairs" if caller == "profile" else "profile")
+        assert "occupancy_score" in recalled.motifs.columns
+        tr = scan.to_track_df("occupancy_score")
+        np.testing.assert_array_equal(tr["value"].to_numpy(), scan.occupancy_score)
+        assert "occupancy_score" in scan.to_pygenomic_tracks()
+        assert scan.metadata["occupancy"]["inner"] == 5
+    genome = store.scan_genome_pillars(min_bin_frags=1)
+    assert "occupancy_score" in genome.columns
+    assert genome["occupancy_score"].notna().all()
+
+
+def test_plot_occupancy_panel():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    store = _make_synthetic_chec_store()
+    scan = store.scan_locus_pillars("chr1:1100-1400")
+    fig, ax = plt.subplots()
+    scan.plot(ax=ax, what="occupancy")
+    assert ax.get_ylabel().startswith("Occupancy")
+    plt.close(fig)

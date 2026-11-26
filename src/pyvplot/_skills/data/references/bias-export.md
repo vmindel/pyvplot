@@ -14,7 +14,12 @@ bias = vp.KmerBiasTable.from_cuts(
     k=6,
     cut_offset=3,           # default k // 2
     pseudocount=1.0,
+    exclude=None,           # chrom/start/end DataFrame or (chrom, start, end) tuples left out of the fit
 )
+# `exclude` drops every k-mer overlapping an interval from both observed and background counts.
+# Without a naked-DNA control, fit the sample's own cuts with peaks AND the factor's motif
+# matches excluded: off-peak motif copies can still be weakly bound (KLF5 ChEC-seq), and a
+# table fitted on them learns that protection as sequence preference.
 
 # Or load an existing TSV/CSV/DataFrame (kmer, score)
 bias = vp.KmerBiasTable.from_table("tn5_6mer_bias.tsv")

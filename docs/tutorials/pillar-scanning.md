@@ -111,6 +111,7 @@ Without `store=`, the top panel shows the length-resolved cut matrix instead. `s
 | `left_pillar_score`, `right_pillar_score`, `core_pillar_score` | `pillar_score` at `l`, `r` and `center` (divided by the expected rate with `expected_cuts`) |
 | `tf_coverage` | short fragments covering `center` |
 | `composite_score` | `protection_score * log2(1 + mean flank) * log2(1 + tf_coverage)`; the genome scan sorts by it |
+| `occupancy_score` | `scan.occupancy_score` at `center` (below); not used for calling |
 
 `scan.pillars`, one row per called pillar:
 
@@ -123,6 +124,25 @@ Without `store=`, the top panel shows the length-resolved cut matrix instead. `s
 | `left_cuts`, `right_cuts`, `left_frac`, `strand` | fragment starts and ends at the pillar; `strand` is `+` when starts dominate, as on the right flank of a bound site |
 
 `scan.protection_score` is the 1-bp profile: at each boundary, the best over `footprint_widths` (restricted to `motif_width_range`) of the coverage-weighted depletion score; `protection_2d` holds every width and `best_widths` the winner. The default caller calls its peaks; with `caller="pairs"` it is context only.
+
+## Occupancy from bracketing fragments
+
+Depletion asks for an uncut core, and the enzyme's sequence preference can produce one with nothing bound ([Sequence bias](#sequence-bias)). ChEC also reads binding out a second way: the tethered nuclease cuts on both sides of the factor, so a bound site sits inside many short fragments whose two ends fall a few bp to either side of it. `scan.occupancy_score` counts, at each boundary `c`, the 20–120 bp fragments (`tf_len_range`) that start in `[c - 60, c - 5]` and end in `[c + 5, c + 60]`. It scores that count against its mean at `c ± [40, 150]` as a signed Poisson log-likelihood ratio, which grows with depth. `vp.occupancy_profile()` computes the same track for any region without a scan, with other windows, or as `score="log2"` (a depth-free ratio) or `score="counts"`:
+
+```python
+occ = vp.occupancy_profile(frags, "chr1:4800-5500")
+print(bool((occ == scan.occupancy_score).all()))
+print(scan.motifs[["start", "end", "protection_score", "occupancy_score"]].round(1).to_string(index=False))
+```
+
+```text
+True
+ start  end  protection_score  occupancy_score
+  5000 5015               1.8              8.3
+  5300 5313               2.1              4.6
+```
+
+`scan.plot(ax=ax, what="occupancy")` draws the track with the calls as dots, and `to_track_df("occupancy_score")` exports it. On KLF5 ChEC-seq, the occupancy track separated KLF sites from other positions of the same coverage and GC content better than the protection profile, but its peaks are broad: only about a quarter fell within 3 bp of the site, against two thirds for protection. Rank or weight footprints by it, and place them with the protection profile.
 
 ## Thresholds and re-calling
 
@@ -188,7 +208,7 @@ print(expected("chr1", 5000, 5004).round(2), len(scan_b.motifs), len(motifs_b))
 
 `expected(chrom, start, end)` gives, at each boundary, the propensity of a fragment starting there plus that of one ending there. The scanner rescales it to mean 1 per window and divides `pillar_score` by it before computing the profile and scoring calls; pillars themselves are still called on the uncorrected score. `scan.call()` reuses the scan's correction, and `scan.call(expected_cuts=...)` recomputes the profile with a new one. Here the table is random, so the correction mostly adds noise: three weak extra calls appear. On a simulated naked-DNA store with strong 4-mer bias and no bound sites, the correction cut false calls of the pair caller from 58 to 9.
 
-Fit the table on DNA the factor does not bind. On KLF5 ChEC-seq, cuts "away from peaks" were not unbound: in DNA at least 2 kb from any peak tile and outside every active window, 9-mers resembling the KLF site were about twice as depleted, and had about twice as many short-fragment midpoints centred on them, as other 9-mers of the same GC content. A 6-mer table fitted there (k-mers masked as `N` around peaks) predicted those cores cut at 0.6–0.7 of their flanks, against 0.24–0.31 observed. Part of that gap is weak binding the table cannot see, and part is GC-rich cores the table underpredicts. A free-MNase or naked-DNA control, or a table fitted with the factor's motif matches masked, avoids absorbing binding into the bias.
+Fit the table on DNA the factor does not bind. On KLF5 ChEC-seq, cuts "away from peaks" were not unbound: in DNA at least 2 kb from any peak tile and outside every active window, 9-mers resembling the KLF site were about twice as depleted, and had about twice as many short-fragment midpoints centred on them, as other 9-mers of the same GC content. A 6-mer table fitted there (k-mers masked as `N` around peaks) predicted those cores cut at 0.6–0.7 of their flanks, against 0.24–0.31 observed. Part of that gap is weak binding the table cannot see, and part is GC-rich cores the table underpredicts. A free-MNase or naked-DNA control, or a table fitted with the factor's motif matches masked, avoids absorbing binding into the bias. `KmerBiasTable.from_cuts(store, genome, exclude=intervals)` drops every k-mer that overlaps a `chrom, start, end` interval from both the observed and the background counts, so peaks and motif matches can be left out of a fit on the sample's own cuts.
 
 ## Calibrating on a control
 
