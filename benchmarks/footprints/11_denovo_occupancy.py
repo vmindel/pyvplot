@@ -2,7 +2,7 @@
 
 Top protection calls (genome_calls_user.parquet, from 05_shipped.py) are split into
 occupancy tertiles with ``pyvplot.occupancy_profile(score="log2")`` (bias-ms,
-feat/occupancy-score e0e8846; run with that worktree's src on PYTHONPATH). If occupancy
+feat/occupancy-score, merged in 89c8df4). If occupancy
 separates binding from cleavage preference, KLF should concentrate in the high tertile and
 MNase signatures (CTAG) / bare GC in the low one.
 
