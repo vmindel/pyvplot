@@ -42,6 +42,7 @@ from pyvplot.matrices import (
 from pyvplot.pillars import (
     LocusPillarScan,
     find_active_windows,
+    occupancy_profile,
     pillar_expected_cuts,
     scan_genome_pillars,
     scan_locus_pillars,
@@ -88,6 +89,7 @@ __all__ = [
     "locus_vplot",
     "normalize_anchors",
     "normalize_by_control",
+    "occupancy_profile",
     "phasogram",
     "pillar_expected_cuts",
     "qc_summary",

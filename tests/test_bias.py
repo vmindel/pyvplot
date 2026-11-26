@@ -379,3 +379,25 @@ def test_extract_anchor_sequences_aligns_kmers_for_stranded_chip_exo(width, stra
         if orient:
             via_genome = tab.correct_matrix(m, {"chr1": g}, anchors=anchors, pseudocount=0, preserve_scale=False)
             np.testing.assert_allclose(via_genome.values, cor.values)
+
+
+def test_from_cuts_exclude_drops_masked_kmers_from_both_counts():
+    """Cuts and background inside `exclude` are ignored: a preference planted only there vanishes."""
+    import pandas as pd
+
+    rng = np.random.default_rng(3)
+    seq = "".join(rng.choice(list("ACGT"), size=20_000))
+    hot = [i + 2 for i in range(50, 9_800) if seq[i : i + 4] == "GATC"]
+    bg = rng.integers(50, 19_700, size=2000)
+    starts = np.sort(np.r_[np.repeat(hot, 15), bg]).astype(np.int32)
+    store = FragmentStore(starts={"chr1": starts}, ends={"chr1": starts + 80}, assay="chec")
+    full = KmerBiasTable.from_cuts(store, {"chr1": seq}, k=4, cut_offset=2)
+    assert full["GATC"] > 3.0
+    # the planted GATC cuts, and their fragments' right ends, all fall in [0, 9_900)
+    for exclude in (pd.DataFrame({"chrom": ["chr1"], "start": [0], "end": [9_900]}), [("chr1", 0, 9_900)]):
+        masked = KmerBiasTable.from_cuts(store, {"chr1": seq}, k=4, cut_offset=2, exclude=exclude)
+        assert masked["GATC"] < 1.6
+    same = KmerBiasTable.from_cuts(store, {"chr1": seq}, k=4, cut_offset=2, exclude=[("chr2", 0, 9_900)])
+    np.testing.assert_allclose(same.weights, full.weights)
+    with pytest.raises(ValueError, match="missing columns"):
+        KmerBiasTable.from_cuts(store, {"chr1": seq}, k=4, cut_offset=2, exclude=pd.DataFrame({"chrom": ["chr1"]}))

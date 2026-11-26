@@ -146,6 +146,47 @@ def _get_chrom_seq(sequences: Any, chrom: str) -> str | None:
     return None
 
 
+def _exclude_by_chrom(exclude: Any) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Group ``exclude`` intervals (a ``chrom, start, end`` DataFrame or ``(chrom, start, end)``
+    tuples, 0-based half-open) by chromosome as ``{chrom: (starts, ends)}``."""
+    if exclude is None:
+        return {}
+    if isinstance(exclude, pd.DataFrame):
+        missing = {"chrom", "start", "end"} - set(exclude.columns)
+        if missing:
+            raise ValueError(f"`exclude` is missing columns {sorted(missing)}.")
+        df = pd.DataFrame(
+            {
+                "chrom": exclude["chrom"].astype(str).to_numpy(),
+                "start": exclude["start"].to_numpy(dtype=np.int64),
+                "end": exclude["end"].to_numpy(dtype=np.int64),
+            }
+        )
+    else:
+        df = pd.DataFrame([(str(c), int(s), int(e)) for c, s, e in exclude], columns=["chrom", "start", "end"])
+    df = df[df["end"] > df["start"]]
+    return {
+        str(c): (g["start"].to_numpy(dtype=np.int64), g["end"].to_numpy(dtype=np.int64))
+        for c, g in df.groupby("chrom", sort=False)
+    }
+
+
+def _mask_sequence(seq: str, intervals: tuple[np.ndarray, np.ndarray] | None) -> str:
+    """Replace the bases of ``intervals`` with ``N``, so every k-mer touching them is ambiguous."""
+    if intervals is None or len(intervals[0]) == 0:
+        return seq
+    n = len(seq)
+    s = np.clip(intervals[0], 0, n)
+    e = np.clip(intervals[1], 0, n)
+    ok = e > s
+    if not ok.any():
+        return seq
+    diff = np.bincount(s[ok], minlength=n + 1) - np.bincount(e[ok], minlength=n + 1)
+    arr = np.frombuffer(seq.encode("ascii"), dtype=np.uint8).copy()
+    arr[np.cumsum(diff[:n]) > 0] = ord("N")
+    return arr.tobytes().decode("ascii")
+
+
 def _fetch_subseq(genome: Any, chrom_cache: dict[str, str | None], chrom: str, start: int, end: int) -> str:
     """Fetch genomic interval ``[start, end)`` padding out-of-bounds or missing chromosomes with ``'N'``."""
     width = end - start
@@ -403,6 +444,7 @@ class KmerBiasTable:
         cut_offset: int | None = None,
         chroms: Collection[str] | None = None,
         pseudocount: float = 1.0,
+        exclude: pd.DataFrame | Sequence[tuple[str, int, int]] | None = None,
     ) -> KmerBiasTable:
         """Estimate empirical k-mer cleavage bias from naked-DNA control cuts and sequences.
 
@@ -427,6 +469,13 @@ class KmerBiasTable:
             Restrict estimation to these chromosomes.
         pseudocount:
             Added to observed and background k-mer counts.
+        exclude:
+            Intervals left out of the fit, as a ``chrom, start, end`` DataFrame or
+            ``(chrom, start, end)`` tuples (0-based, half-open). Every k-mer that overlaps one
+            is dropped from both the observed and the background counts. Use it when the store
+            is not naked DNA, e.g. to fit a ChEC sample's own cuts away from its peaks and its
+            motif matches: off-peak motif copies can still be weakly bound, and their
+            protection would otherwise be learned as sequence preference.
 
         Raises
         ------
@@ -440,11 +489,13 @@ class KmerBiasTable:
         bg_counts = np.zeros(n_kmers, dtype=np.float64)
 
         target_chroms = list(store.chroms) if chroms is None else [c for c in store.chroms if c in set(chroms)]
+        excluded = _exclude_by_chrom(exclude)
         n_used = 0
         for chrom in target_chroms:
             seq = _get_chrom_seq(sequences, chrom)
             if seq is None or len(seq) < k:
                 continue
+            seq = _mask_sequence(seq, excluded.get(chrom))
             n_used += 1
             n_seq = len(seq)
 

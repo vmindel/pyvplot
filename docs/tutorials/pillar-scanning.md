@@ -111,6 +111,7 @@ Without `store=`, the top panel shows the length-resolved cut matrix instead. `s
 | `left_pillar_score`, `right_pillar_score`, `core_pillar_score` | `pillar_score` at `l`, `r` and `center` (divided by the expected rate with `expected_cuts`) |
 | `tf_coverage` | short fragments covering `center` |
 | `composite_score` | `protection_score * log2(1 + mean flank) * log2(1 + tf_coverage)`; the genome scan sorts by it |
+| `occupancy_score` | `scan.occupancy_score` at `center` (below); not used for calling |
 
 `scan.pillars`, one row per called pillar:
 
@@ -123,6 +124,25 @@ Without `store=`, the top panel shows the length-resolved cut matrix instead. `s
 | `left_cuts`, `right_cuts`, `left_frac`, `strand` | fragment starts and ends at the pillar; `strand` is `+` when starts dominate, as on the right flank of a bound site |
 
 `scan.protection_score` is the 1-bp profile: at each boundary, the best over `footprint_widths` (restricted to `motif_width_range`) of the coverage-weighted depletion score; `protection_2d` holds every width and `best_widths` the winner. The default caller calls its peaks; with `caller="pairs"` it is context only.
+
+## Occupancy from bracketing fragments
+
+Depletion asks for an uncut core, and the enzyme's sequence preference can produce one with nothing bound ([Sequence bias](#sequence-bias)). ChEC also reads binding out a second way: the tethered nuclease cuts on both sides of the factor, so a bound site sits inside many short fragments whose two ends fall a few bp to either side of it. `scan.occupancy_score` counts, at each boundary `c`, the 20–120 bp fragments (`tf_len_range`) that start in `[c - 60, c - 5]` and end in `[c + 5, c + 60]`. It scores that count against its mean at `c ± [40, 150]` as a signed Poisson log-likelihood ratio, which grows with depth. `vp.occupancy_profile()` computes the same track for any region without a scan, with other windows, or as `score="log2"` (a depth-free ratio) or `score="counts"`:
+
+```python
+occ = vp.occupancy_profile(frags, "chr1:4800-5500")
+print(bool((occ == scan.occupancy_score).all()))
+print(scan.motifs[["start", "end", "protection_score", "occupancy_score"]].round(1).to_string(index=False))
+```
+
+```text
+True
+ start  end  protection_score  occupancy_score
+  5000 5015               1.8              8.3
+  5300 5313               2.1              4.6
+```
+
+`scan.plot(ax=ax, what="occupancy")` draws the track with the calls as dots, and `to_track_df("occupancy_score")` exports it. On KLF5 ChEC-seq, the occupancy track separated KLF sites from other positions of the same coverage and GC content better than the protection profile, but its peaks are broad: only about a quarter fell within 3 bp of the site, against two thirds for protection. Rank or weight footprints by it, and place them with the protection profile.
 
 ## Thresholds and re-calling
 
@@ -188,7 +208,7 @@ print(expected("chr1", 5000, 5004).round(2), len(scan_b.motifs), len(motifs_b))
 
 `expected(chrom, start, end)` gives, at each boundary, the propensity of a fragment starting there plus that of one ending there. The scanner rescales it to mean 1 per window and divides `pillar_score` by it before computing the profile and scoring calls; pillars themselves are still called on the uncorrected score. `scan.call()` reuses the scan's correction, and `scan.call(expected_cuts=...)` recomputes the profile with a new one. Here the table is random, so the correction mostly adds noise: three weak extra calls appear. On a simulated naked-DNA store with strong 4-mer bias and no bound sites, the correction cut false calls of the pair caller from 58 to 9.
 
-A short k-mer table does not capture all of the enzyme's preference. On KLF5 ChEC-seq, a 6-mer table fitted on the library's own cuts away from peaks predicted cores at the commonest KLF 9-mers cut at about 0.6–0.7 of their flanks; the same 9-mers far from any peak were cut at 0.07–0.12. MNase barely cuts long GC runs, bound or not.
+Fit the table on DNA the factor does not bind. On KLF5 ChEC-seq, cuts "away from peaks" were not unbound: in DNA at least 2 kb from any peak tile and outside every active window, 9-mers resembling the KLF site were about twice as depleted, and had about twice as many short-fragment midpoints centred on them, as other 9-mers of the same GC content. A 6-mer table fitted there (k-mers masked as `N` around peaks) predicted those cores cut at 0.6–0.7 of their flanks, against 0.24–0.31 observed. Part of that gap is weak binding the table cannot see, and part is GC-rich cores the table underpredicts. A free-MNase or naked-DNA control, or a table fitted with the factor's motif matches masked, avoids absorbing binding into the bias. `KmerBiasTable.from_cuts(store, genome, exclude=intervals)` drops every k-mer that overlaps a `chrom, start, end` interval from both the observed and the background counts, so peaks and motif matches can be left out of a fit on the sample's own cuts. On KLF5 ChEC-seq, leaving out the top 1% of KLF-like 9-mers as well moved the table's expected core/flank ratio at held-out KLF-like 9-mers with 8 GC from 0.68 to 0.77 (observed 0.24). That is more than an equal-sized, GC-matched mask of other 9-mers moved it. Footprint calls were equally good with either table: slightly better than with no correction at all. Most of the depletion at GC-rich sites is something no 6-mer table predicts.
 
 ## Calibrating on a control
 
@@ -235,6 +255,7 @@ Below 0.75 the control calls about as much as the sample, so those calls are noi
 On KLF5 ChEC-seq (64 M fragments), scored inside 64k ISM tiles against FiNeMo hits called on a sequence model's attributions (`benchmarks/footprints` in the repository):
 
 - Profile peaks sat on hit centres (median offset −0.5 bp) and beat the pair caller at every call density: at about 10 calls/kb, 29% precision and 34% recall against 22% and 20% for pairs at 7.7/kb (random placement: 8%).
-- Much of the signal is sequence. The GC fraction of 10 bp alone separated hit centres from other positions better than the profile (AUROC 0.85 against 0.74–0.77). Within bins matched for both coverage and GC the profile still reached 0.70, so it carries information beyond composition.
+- GC content alone separated hit centres from other positions better than the profile (AUROC 0.85 against 0.74–0.77). Part of that is circular, since the hits are GC boxes by construction, and part is cleavage preference. Within bins matched for both coverage and GC, the profile still reached 0.70.
+- Short fragments centred on the site are the more motif-specific readout. At the same 9-mer, short-fragment midpoints were enriched about 4× over local background at hits against about 2× in peak tiles without a hit, where cut depletion could not tell the two apart (0.013 against 0.014 of flank).
 
 Read a footprint as occupancy only after comparing it with a sequence-only baseline (GC or k-mer expected cuts) or a free-MNase control.
