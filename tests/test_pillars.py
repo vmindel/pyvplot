@@ -54,7 +54,7 @@ def _make_synthetic_chec_store() -> vp.FragmentStore:
 
 def test_scan_locus_pillars_and_track_dfs():
     store = _make_synthetic_chec_store()
-    scan = store.scan_locus_pillars("chr1:1100-1400")
+    scan = store.scan_locus_pillars("chr1:1100-1400", caller="pairs")
 
     assert scan.chrom == "chr1"
     assert scan.start == 1100
@@ -126,7 +126,7 @@ def test_shadow_regression_single_footprint_with_background():
         {"chr1": np.array(ends, dtype=np.int32)},
         assay="chec",
     )
-    scan = store.scan_locus_pillars("chr1:1600-2400")
+    scan = store.scan_locus_pillars("chr1:1600-2400", caller="pairs")
     assert len(scan.motifs) == 1
     assert int(scan.motifs["start"].iloc[0]) == 2000
     assert int(scan.motifs["end"].iloc[0]) == 2016
@@ -190,10 +190,10 @@ def test_truncation_regression_wide_active_window():
     orig_numba = pillars_mod.HAS_NUMBA
     try:
         pillars_mod.HAS_NUMBA = True
-        motifs_nb, pil_nb = store.scan_genome_pillars(return_pillars=True)
+        motifs_nb, pil_nb = store.scan_genome_pillars(return_pillars=True, caller="pairs")
 
         pillars_mod.HAS_NUMBA = False
-        motifs_py, pil_py = store.scan_genome_pillars(return_pillars=True)
+        motifs_py, pil_py = store.scan_genome_pillars(return_pillars=True, caller="pairs")
     finally:
         pillars_mod.HAS_NUMBA = orig_numba
 
@@ -245,7 +245,7 @@ def test_simulation_precision_recall_and_zero_boundary_offset():
     keep = S_arr >= 0
     store = vp.FragmentStore.from_arrays({"chr1": S_arr[keep]}, {"chr1": E_arr[keep]}, assay="chec")
 
-    motifs_df = store.scan_genome_pillars()
+    motifs_df = store.scan_genome_pillars(caller="pairs")
     planted_arr = np.array(planted, dtype=np.int64)
     p_centers = 0.5 * (planted_arr[:, 0] + planted_arr[:, 1])
 
@@ -303,7 +303,7 @@ def test_pillars_land_on_sharp_and_jittered_cut_stacks(jitter):
             {"chr1": np.array(ends)[order].astype(np.int32)},
             assay="chec",
         )
-        scan = store.scan_locus_pillars("chr1:4800-5200")
+        scan = store.scan_locus_pillars("chr1:4800-5200", caller="pairs")
         assert {l_b, r_b} <= set(scan.pillars["pos"].tolist()), seed
         hits = scan.motifs[(scan.motifs["center"] - 5008).abs() < 8]
         assert hits[["start", "end"]].values.tolist() == [[l_b, r_b]], seed
@@ -340,31 +340,36 @@ def _called(scan_or_df, l_b, r_b):
 
 def test_motif_width_range_is_exact_and_inclusive():
     store = _single_footprint_store(5000, 5025)  # r - l = 25
-    assert not _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(10, 24)), 5000, 5025)
-    assert _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(10, 25)), 5000, 5025)
+    assert not _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(10, 24), caller="pairs"), 5000, 5025)
+    assert _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(10, 25), caller="pairs"), 5000, 5025)
     store = _single_footprint_store(5000, 5010)  # lower bound, r - l = 10
-    assert _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(10, 24)), 5000, 5010)
-    assert not _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(11, 24)), 5000, 5010)
+    assert _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(10, 24), caller="pairs"), 5000, 5010)
+    assert not _called(store.scan_locus_pillars("chr1:4800-5200", motif_width_range=(11, 24), caller="pairs"), 5000, 5010)
 
 
-def test_expected_cuts_scale_free_validated_and_kept_by_call():
+@pytest.mark.parametrize("caller", ["pairs", "profile"])
+def test_expected_cuts_scale_free_validated_and_kept_by_call(caller):
     store = _single_footprint_store(5000, 5016)
     region, W = "chr1:4800-5200", 400
     rng = np.random.default_rng(0)
     exp = rng.uniform(0.5, 2.0, W)
-    a = store.scan_locus_pillars(region, expected_cuts=exp)
-    b = store.scan_locus_pillars(region, expected_cuts=exp * 1e-3)
+    a = store.scan_locus_pillars(region, expected_cuts=exp, caller=caller)
+    b = store.scan_locus_pillars(region, expected_cuts=exp * 1e-3, caller=caller)
     pd.testing.assert_frame_equal(a.motifs, b.motifs)
     # .call() reuses the scan's array unless given another
     pd.testing.assert_frame_equal(a.call().motifs, a.motifs)
-    plain = store.scan_locus_pillars(region)
+    plain = store.scan_locus_pillars(region, caller=caller)
     pd.testing.assert_frame_equal(plain.call(expected_cuts=exp).motifs, a.motifs)
     # a core expected to be rarely cut explains the depletion away
     gc_core = np.ones(W)
     gc_core[5003 - 4800 : 5013 - 4800] = 0.15
-    hit = plain.motifs[(plain.motifs.start == 5000) & (plain.motifs.end == 5016)]
-    hit_bias = store.scan_locus_pillars(region, expected_cuts=gc_core).motifs
-    hit_bias = hit_bias[(hit_bias.start == 5000) & (hit_bias.end == 5016)]
+    def at_footprint(m):
+        if caller == "pairs":
+            return m[(m.start == 5000) & (m.end == 5016)]
+        return m[(m.center - 5008).abs() <= 3]
+
+    hit = at_footprint(plain.motifs)
+    hit_bias = at_footprint(store.scan_locus_pillars(region, expected_cuts=gc_core, caller=caller).motifs)
     assert len(hit) == 1
     assert len(hit_bias) == 0
     with pytest.raises(ValueError, match="one value per bp"):
@@ -480,3 +485,42 @@ def test_plot_draws_calls_at_pair_score_and_threshold_on_them():
     scan.plot(ax=ax)
     assert len(ax.containers) == len(scan.motifs)
     plt.close(fig)
+
+
+def test_profile_caller_calls_sit_on_profile_peaks():
+    store = _make_synthetic_chec_store()
+    scan = store.scan_locus_pillars("chr1:1100-1400")
+    assert scan.metadata["caller"] == "profile"
+    m = scan.motifs
+    assert {"chrom", "start", "end", "center", "width", "protection_score"}.issubset(m.columns)
+    assert len(m) >= 2
+    for r in m.itertuples():
+        i = int(r.center) - scan.start
+        p = scan.protection_score
+        assert p[i] == pytest.approx(r.protection_score)
+        assert p[i] >= scan.metadata["min_protection_score"]
+        assert p[i] > p[i - 1] and p[i] >= p[i + 1]
+        w, fp = int(scan.best_widths[i]), scan.metadata["flank_pad"]
+        assert abs(int(r.start) - (int(r.center) - w // 2)) <= fp
+        assert abs(int(r.end) - (int(r.center) + w - w // 2)) <= fp
+        assert int(r.width) == int(r.end) - int(r.start)
+        assert r.start < r.center < r.end
+    assert (np.diff(m["center"].to_numpy()) >= scan.metadata["min_motif_distance"]).all()
+    # both planted 17-bp footprints are found at their centres
+    for c in (1207.5, 1267.5):
+        assert (m["center"] - c).abs().min() <= 2
+
+
+def test_call_switches_caller_without_rescanning():
+    store = _make_synthetic_chec_store()
+    prof = store.scan_locus_pillars("chr1:1100-1400")
+    pairs = store.scan_locus_pillars("chr1:1100-1400", caller="pairs")
+    assert pairs.metadata["min_protection_score"] == 0.75
+    assert prof.metadata["min_protection_score"] == 1.0
+    pd.testing.assert_frame_equal(prof.call(caller="pairs").motifs, pairs.motifs)
+    pd.testing.assert_frame_equal(pairs.call(caller="profile").motifs, prof.motifs)
+    pd.testing.assert_frame_equal(prof.call().motifs, prof.motifs)
+    with pytest.raises(ValueError, match="caller"):
+        store.scan_locus_pillars("chr1:1100-1400", caller="peaks")
+    with pytest.raises(ValueError, match="caller"):
+        store.scan_genome_pillars(caller="peaks")

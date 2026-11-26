@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed (pillar scanner: calls are peaks of the protection profile)
+- `scan_locus_pillars`, `scan_genome_pillars`, their `FragmentStore` methods and `LocusPillarScan.call` take `caller="profile"` (new default) or `"pairs"`. The profile caller calls peaks of the 1-bp `protection_score` profile, each spanning its best width with both edges moved to the tallest `pillar_score` within `flank_pad`, so calls always sit on the profile; `"pairs"` is the previous pillar-pair caller, unchanged. On KLF5 ChEC-seq, scored against FiNeMo hits from a sequence model inside 64k ISM tiles, profile peaks had higher precision and recall than pillar pairs at every call density (29% / 34% at ~10 calls/kb against 22% / 20% at 7.7/kb). `min_protection_score` now defaults to `None`: 1.0 for `"profile"`, 0.75 for `"pairs"`.
+- `scan_genome_pillars` takes `footprint_widths` and `flank_pad`, and computes the profile per active window for the profile caller.
+- `expected_cuts` now also divides `pillar_score` before the profile is computed (it used to correct pair scoring only), and `scan.call(expected_cuts=...)` recomputes `protection_score`, `protection_2d`, `raw_protection_2d` and `best_widths`.
+- Docs: tutorial and skill reference describe both callers, and a *Real data* section reports the KLF5 benchmark, including that 10-bp GC content alone ranks FiNeMo hit centres better than the profile (MNase barely cuts GC runs) and that a 6-mer bias table explains only part of it.
+- `benchmarks/footprints/`: the scripts behind those numbers (bsub jobs; lab paths).
+
 ### Added (de-novo cut-pillar & motif footprint scanner)
 - `scan_locus_pillars` and `scan_genome_pillars` (and their `FragmentStore` methods) identify multi-length cleavage pillars (`pillar_score`) and protected motif footprints from paired-end fragment cleavage geometry. Index `p` of `left_cuts`/`right_cuts`/`pillar_score` represents the cut boundary at genomic `L + p`; candidate motifs are called as pairs `(l, r)` of called pillars with `r - l` in `motif_width_range` scored by core depletion between them, producing exact `[l, r)` intervals without single-flank shadow calls. Pillars are detected on the `pillar_window`-smoothed score, then placed at the centroid of their unsmoothed cut stack, so a stack 1 bp wide is not shifted to a noise-chosen edge of the smoothing plateau.
 - `LocusPillarScan` provides `.call(...)` for instant re-thresholding (including an optional `expected_cuts` hook for sequence-bias normalization), `.to_track_df(...)` and `.to_pygenomic_tracks(...)` returning `chrom, start, end` DataFrames ready for `pygenomic_tracks`, and `.plot(ax=...)` for single-axis track rendering or standalone multi-panel QC figures.

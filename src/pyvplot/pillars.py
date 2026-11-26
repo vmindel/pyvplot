@@ -306,6 +306,195 @@ def _compute_cov_weight(cov_tf: np.ndarray) -> np.ndarray:
     return cov_f64 / (cov_f64 + 0.10 * local_cov_max + 10.0)
 
 
+_MOTIF_COLUMNS = [
+    "chrom",
+    "start",
+    "end",
+    "center",
+    "width",
+    "name",
+    "score",
+    "strand",
+    "protection_score",
+    "raw_log2_protection",
+    "core_pillar_score",
+    "left_pillar_score",
+    "right_pillar_score",
+    "tf_coverage",
+    "composite_score",
+]
+
+_CALLERS = ("profile", "pairs")
+
+
+def _check_caller(caller: str) -> str:
+    if caller not in _CALLERS:
+        raise ValueError(f"caller must be 'profile' or 'pairs', got {caller!r}.")
+    return caller
+
+
+def _default_min_protection(caller: str, value: float | None) -> float:
+    """``min_protection_score`` default per caller: profile peaks 1.0, pillar pairs 0.75."""
+    if value is not None:
+        return float(value)
+    return 1.0 if caller == "profile" else 0.75
+
+
+def _protection_profile(
+    pillar_score: np.ndarray,
+    cov_weight: np.ndarray,
+    widths: np.ndarray,
+    motif_width_range: tuple[int, int],
+    flank_pad: int,
+    flank_mode: str,
+    pseudocount: float,
+    expected_cuts: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Sliding-window protection at every boundary and every footprint width.
+
+    For width ``w`` centred on boundary ``x`` the footprint is ``[x - w // 2, x + w - w // 2)``;
+    its core (``w`` minus 2 bp at each edge) is compared with the strongest ``pillar_score``
+    within ``flank_pad`` of each edge. With ``expected_cuts`` the pillar score is divided by the
+    rescaled sequence-expected cut rate first. Returns ``(protection_2d, raw_protection_2d,
+    protection_1d, raw_protection_1d, best_widths)``; the 1-D profile takes the best width
+    within ``motif_width_range`` where any width is positive, the mean over widths elsewhere.
+    """
+    W = len(pillar_score)
+    ps = np.asarray(pillar_score, dtype=np.float64)
+    if expected_cuts is not None:
+        ps = ps / _relative_expected(expected_cuts, W)
+    prot_2d_scale = np.zeros((len(widths), W), dtype=np.float64)
+    prot_2d_raw = np.zeros((len(widths), W), dtype=np.float64)
+    ps_pad = np.concatenate([[0.0], np.cumsum(ps)])
+    xs = np.arange(W, dtype=np.int64)
+    p_max_flank = _max_filter_1d(ps, 2 * int(flank_pad) + 1)
+    pc = float(pseudocount)
+
+    for idx_w, w in enumerate(widths):
+        half_l = int(w) // 2
+        half_r = int(w) - half_l
+        in_l = max(1, half_l - 2)
+        in_r = max(1, half_r - 2)
+        c_lo = np.clip(xs - in_l, 0, W)
+        c_hi = np.clip(xs + in_r + 1, 0, W)
+        core_mean = (ps_pad[c_hi] - ps_pad[c_lo]) / np.maximum(1, c_hi - c_lo)
+        core_max = _max_filter_1d(ps, in_l + in_r + 1)
+        core_eff = 0.5 * core_mean + 0.5 * core_max
+
+        l_idx = np.clip(xs - half_l, 0, max(0, W - 1))
+        r_idx = np.clip(xs + half_r, 0, max(0, W - 1))
+        flank_l = p_max_flank[l_idx] if W > 0 else np.zeros(0)
+        flank_r = p_max_flank[r_idx] if W > 0 else np.zeros(0)
+
+        f_min = np.minimum(flank_l, flank_r)
+        f_max = np.maximum(flank_l, flank_r)
+        if flank_mode == "both":
+            flank_paired = (np.maximum(0.0, f_min) ** 0.65) * (np.maximum(0.0, f_max) ** 0.35)
+        else:
+            flank_paired = 0.65 * f_max + 0.35 * f_min
+
+        raw_log2 = np.log2((flank_paired + pc) / (core_eff + pc))
+        prot_2d_raw[idx_w] = raw_log2
+        prot_2d_scale[idx_w] = raw_log2 * cov_weight
+
+    w_mask = (widths >= motif_width_range[0]) & (widths <= motif_width_range[1])
+    if not np.any(w_mask):
+        w_mask = np.ones(len(widths), dtype=bool)
+    sub_widths = widths[w_mask]
+    sub_scale = prot_2d_scale[w_mask]
+    sub_raw = prot_2d_raw[w_mask]
+
+    if W > 0:
+        best_w_idx = np.argmax(sub_scale, axis=0)
+        max_scale = sub_scale[best_w_idx, np.arange(W)]
+        mean_scale = sub_scale.mean(axis=0)
+        prot_1d = np.where(max_scale > 0.0, max_scale, mean_scale)
+        prot_1d_raw = np.where(max_scale > 0.0, sub_raw[best_w_idx, np.arange(W)], sub_raw.mean(axis=0))
+        best_widths = sub_widths[best_w_idx]
+    else:
+        prot_1d = np.empty(0, dtype=np.float64)
+        prot_1d_raw = np.empty(0, dtype=np.float64)
+        best_widths = np.empty(0, dtype=np.int32)
+    return prot_2d_scale, prot_2d_raw, prot_1d, prot_1d_raw, best_widths
+
+
+def _call_profile_peaks(
+    *,
+    chrom: str,
+    L: int,
+    protection: np.ndarray,
+    raw_protection: np.ndarray,
+    best_widths: np.ndarray,
+    pillar_score: np.ndarray,
+    cov_tf: np.ndarray,
+    flank_pad: int,
+    min_protection_score: float,
+    min_raw_protection: float,
+    min_motif_distance: int,
+    expected_cuts: np.ndarray | None = None,
+) -> pd.DataFrame:
+    """Call footprints as peaks of the 1-bp protection profile.
+
+    A peak at boundary ``x`` with best width ``w`` spans ``[x - w // 2, x + w - w // 2)``; each
+    edge is then moved to the tallest ``pillar_score`` within ``flank_pad`` bp, the flank the
+    profile scored. Peaks must reach ``min_protection_score`` (coverage-weighted) and
+    ``min_raw_protection`` (unweighted) and lie at least ``min_motif_distance`` bp apart (the
+    higher peak wins). ``center`` is the peak itself.
+    """
+    W = len(protection)
+    if W < 3:
+        return pd.DataFrame(columns=_MOTIF_COLUMNS)
+    peaks = _find_peaks_1d(
+        np.asarray(protection, dtype=np.float64),
+        min_height=float(min_protection_score),
+        min_distance=max(1, int(min_motif_distance)),
+    )
+    peaks = peaks[raw_protection[peaks] >= float(min_raw_protection)]
+    if len(peaks) == 0:
+        return pd.DataFrame(columns=_MOTIF_COLUMNS)
+    ps = np.asarray(pillar_score, dtype=np.float64)
+    eff = ps if expected_cuts is None else ps / _relative_expected(expected_cuts, W)
+    fp = int(flank_pad)
+    w0 = best_widths[peaks].astype(np.int64)
+
+    def snap(b: np.ndarray, lo_lim: np.ndarray, hi_lim: np.ndarray) -> np.ndarray:
+        out = b.copy()
+        for i, x in enumerate(b):
+            a, z = max(int(lo_lim[i]), int(x) - fp, 0), min(int(hi_lim[i]), int(x) + fp, W - 1)
+            if z >= a:
+                out[i] = a + int(np.argmax(eff[a : z + 1]))
+        return out
+
+    lo = snap(peaks - w0 // 2, np.zeros_like(peaks), peaks - 2)
+    hi = snap(peaks + (w0 - w0 // 2), peaks + 2, np.full_like(peaks, W - 1))
+    w = hi - lo
+    fl_l = eff[np.clip(lo, 0, W - 1)]
+    fl_r = eff[np.clip(hi, 0, W - 1)]
+    prot = protection[peaks].astype(np.float64)
+    cv = cov_tf[peaks].astype(np.float64)
+    comp = prot * np.log2(1.0 + 0.5 * (fl_l + fl_r)) * np.log2(1.0 + cv)
+    centers = L + peaks
+    return pd.DataFrame(
+        {
+            "chrom": chrom,
+            "start": (L + lo).astype(np.int64),
+            "end": (L + hi).astype(np.int64),
+            "center": centers.astype(np.int64),
+            "width": w,
+            "name": [f"motif_{chrom}_{c}" for c in centers],
+            "score": prot,
+            "strand": ".",
+            "protection_score": prot,
+            "raw_log2_protection": raw_protection[peaks].astype(np.float64),
+            "core_pillar_score": eff[peaks],
+            "left_pillar_score": fl_l,
+            "right_pillar_score": fl_r,
+            "tf_coverage": cv,
+            "composite_score": comp,
+        }
+    )
+
+
 def _call_intervals_from_arrays(
     *,
     chrom: str,
@@ -329,6 +518,7 @@ def _call_intervals_from_arrays(
     min_raw_protection: float = 0.20,
     min_motif_distance: int = 12,
     expected_cuts: np.ndarray | None = None,
+    call_pairs: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Call discrete cut pillars first, then call candidate motifs as pairs ``(l, r)``
     of called pillars with ``r - l`` in ``motif_width_range`` scored by core depletion
@@ -408,7 +598,7 @@ def _call_intervals_from_arrays(
     pc = float(pseudocount)
     edge_trim = max(3, half_pw + 1)
 
-    n_p = len(p_peaks)
+    n_p = len(p_peaks) if call_pairs else 0
     candidates = []
     for i in range(n_p):
         lp = int(p_peaks[i])
@@ -533,16 +723,19 @@ def _call_intervals_from_arrays(
     return pillars_df, motifs_df
 
 
-def _draw_protection(ax: Any, xs: np.ndarray, profile: np.ndarray, motifs: pd.DataFrame, min_prot: float) -> None:
-    """Grey exploratory profile, called pillar pairs as bars at their pair score, and the threshold."""
-    ax.fill_between(xs, 0.0, profile, color="0.78", lw=0, step="mid", label="1-bp profile (exploratory, not the caller)")
+def _draw_protection(
+    ax: Any, xs: np.ndarray, profile: np.ndarray, motifs: pd.DataFrame, min_prot: float, caller: str = "pairs"
+) -> None:
+    """Grey 1-bp profile, called motifs as bars at their score, and the threshold."""
+    lab = "1-bp profile (calls are its peaks)" if caller == "profile" else "1-bp profile (exploratory, not the caller)"
+    ax.fill_between(xs, 0.0, profile, color="0.78", lw=0, step="mid", label=lab)
     ax.axhline(0.0, color="0.3", lw=0.6)
     ax.axhline(min_prot, color="#d62828", ls="--", lw=0.9, label=f"min_protection_score ({min_prot:.2f})")
     for i, (_, m) in enumerate(motifs.iterrows()):
         s, e, sc = float(m["start"]), float(m["end"]), float(m["protection_score"])
         ax.axvspan(s, e, color="#ffd166", alpha=0.35, lw=0, zorder=0)
         ax.bar((s + e) / 2.0, sc, width=e - s, color="#1b4332", alpha=0.9, zorder=3,
-               label=f"Called motif: pair score (n={len(motifs)})" if i == 0 else None)
+               label=f"Called motif (n={len(motifs)})" if i == 0 else None)
     top = max([min_prot, *(float(v) for v in motifs["protection_score"])] + ([float(np.max(profile))] if len(profile) else []))
     bottom = float(np.min(profile)) if len(profile) else 0.0
     # headroom so the legend in the upper corner clears the tallest bar
@@ -562,12 +755,17 @@ class LocusPillarScan:
     Called motifs correspond to intervals ``[l, r)`` between pairs of called cut pillars at
     genomic boundaries ``l`` and ``r``.
 
-    ``protection_score``, ``raw_log2_protection``, ``protection_2d`` and ``best_widths`` are an
-    exploratory sliding-window profile (core depletion against the strongest cuts
-    ``width / 2 +- flank_pad`` bp away, at every position and every ``footprint_widths``).
-    They are not what ``.motifs`` are called from: motifs are scored only between pairs of
-    called pillars, so a profile peak need not be called and a call need not sit on a peak.
-    ``footprint_widths`` and ``flank_pad`` shape this profile only.
+    ``protection_score``, ``raw_log2_protection``, ``protection_2d`` and ``best_widths`` are a
+    sliding-window profile (core depletion against the strongest cuts ``width / 2 +- flank_pad``
+    bp away, at every position and every ``footprint_widths``). With ``caller="profile"``
+    (default) ``.motifs`` are the peaks of ``protection_score``, each spanning its best width.
+    With ``caller="pairs"`` motifs are scored only between pairs of called pillars, so a
+    profile peak need not be called and a call need not sit on a peak.
+
+    The profile measures depletion of cuts, which also follows the enzyme's sequence
+    preference: MNase rarely cuts GC-rich DNA, so a GC box can look protected whether or not
+    it is bound. Pass ``expected_cuts`` and compare against a sequence-only baseline before
+    reading a footprint as occupancy.
     """
 
     chrom: str
@@ -610,15 +808,17 @@ class LocusPillarScan:
         min_pillar_prominence: float | None = None,
         min_pillar_distance: int = 5,
         expected_cuts: np.ndarray | None = None,
+        caller: str | None = None,
     ) -> LocusPillarScan:
-        """Re-call discrete ``.pillars`` and pair-based ``.motifs`` intervals with new thresholds
+        """Re-call discrete ``.pillars`` and ``.motifs`` intervals with new thresholds
         without re-scanning the underlying fragments.
 
         Parameters
         ----------
         min_protection_score:
-            Minimum pair protection score to call a candidate motif ``[l, r)``
-            (defaults to the value used when creating this scan, ``0.75``).
+            Minimum coverage-weighted protection to call a footprint ``[l, r)``
+            (defaults to the value used when creating this scan; 1.0 for ``caller="profile"``,
+            0.75 for ``"pairs"``).
         min_raw_protection:
             Minimum unweighted ``log2((flank + pc) / (core + pc))`` depletion required
             between a pair of flanking pillars (default ``0.20``).
@@ -635,8 +835,12 @@ class LocusPillarScan:
         expected_cuts:
             Per-bp sequence-expected cleavage rate of length ``end - start`` (any scale; it is
             rescaled to mean 1), e.g. from [`KmerBiasTable`][pyvplot.KmerBiasTable], dividing
-            ``pillar_score`` before pillar pairs are scored. Defaults to the array this scan was
-            built with.
+            ``pillar_score`` before the profile and the calls are computed. Defaults to the
+            array this scan was built with; a new array also recomputes the 1-bp and 2-D
+            protection profiles.
+        caller:
+            ``"profile"`` (peaks of the 1-bp protection profile) or ``"pairs"`` (pillar pairs).
+            Defaults to the caller this scan was built with.
 
         Returns
         -------
@@ -644,11 +848,13 @@ class LocusPillarScan:
             A new ``LocusPillarScan`` sharing the same continuous 1D/2D arrays with
             updated ``.motifs``, ``.pillars``, and threshold metadata.
         """
-        mp_score = float(
-            self.metadata.get("min_protection_score", 0.75)
-            if min_protection_score is None
-            else min_protection_score
-        )
+        caller = _check_caller(str(self.metadata.get("caller", "pairs")) if caller is None else caller)
+        if min_protection_score is not None:
+            mp_score = float(min_protection_score)
+        elif caller == str(self.metadata.get("caller", "pairs")) and "min_protection_score" in self.metadata:
+            mp_score = float(self.metadata["min_protection_score"])
+        else:
+            mp_score = _default_min_protection(caller, None)
         mp_prom = float(
             self.metadata.get("min_raw_protection", 0.20)
             if min_raw_protection is None
@@ -701,10 +907,46 @@ class LocusPillarScan:
             min_raw_protection=mp_prom,
             min_motif_distance=mp_dist,
             expected_cuts=exp,
+            call_pairs=caller == "pairs",
         )
+        profile = {}
+        if expected_cuts is not None:
+            p2, p2r, p1, p1r, bw = _protection_profile(
+                self.pillar_score,
+                _compute_cov_weight(self.tf_coverage),
+                self.footprint_widths,
+                motif_width_range,
+                int(self.metadata.get("flank_pad", 2)),
+                flank_mode,
+                pseudocount,
+                exp,
+            )
+            profile = {
+                "protection_2d": p2,
+                "raw_protection_2d": p2r,
+                "protection_score": p1,
+                "raw_log2_protection": p1r,
+                "best_widths": bw,
+            }
+        if caller == "profile":
+            motifs_df = _call_profile_peaks(
+                chrom=self.chrom,
+                L=self.start,
+                protection=profile.get("protection_score", self.protection_score),
+                raw_protection=profile.get("raw_log2_protection", self.raw_log2_protection),
+                best_widths=profile.get("best_widths", self.best_widths),
+                pillar_score=self.pillar_score,
+                cov_tf=self.tf_coverage,
+                flank_pad=int(self.metadata.get("flank_pad", 2)),
+                min_protection_score=mp_score,
+                min_raw_protection=mp_prom,
+                min_motif_distance=mp_dist,
+                expected_cuts=exp,
+            )
         new_meta = dict(self.metadata)
         new_meta.update(
             {
+                "caller": caller,
                 "min_protection_score": mp_score,
                 "min_raw_protection": mp_prom,
                 "min_motif_distance": mp_dist,
@@ -713,7 +955,7 @@ class LocusPillarScan:
                 "min_pillar_prominence": pp_prom,
             }
         )
-        return replace(self, pillars=pillars_df, motifs=motifs_df, metadata=new_meta, expected_cuts=exp)
+        return replace(self, pillars=pillars_df, motifs=motifs_df, metadata=new_meta, expected_cuts=exp, **profile)
 
     def to_track_df(
         self,
@@ -806,10 +1048,10 @@ class LocusPillarScan:
         """Plot into a single existing ``ax`` (for ``pygenomic_tracks`` / multi-track figures)
         or create a standalone multi-panel QC figure when ``ax is None``.
 
-        Called motifs are drawn as bars spanning ``[start, end)`` at their pair
-        ``protection_score``, with ``min_protection_score`` as the threshold line: that is the
-        score calls are made on. The 1-bp ``protection_score`` profile is drawn in grey as
-        context only; motifs are not called from it.
+        Called motifs are drawn as bars spanning ``[start, end)`` at their
+        ``protection_score``, with ``min_protection_score`` as the threshold line. The 1-bp
+        ``protection_score`` profile is drawn in grey: with ``caller="profile"`` calls are its
+        peaks, with ``caller="pairs"`` it is context only.
 
         ``mode="tracks"`` (default) returns four axes: fragment ends (or the length-resolved
         cut matrix without ``store``), protection, pillar score, and TF-size fragment coverage.
@@ -830,7 +1072,7 @@ class LocusPillarScan:
                     xs,
                     self.protection_score,
                     self.motifs if show_motifs else self.motifs.iloc[:0],
-                    float(self.metadata.get("min_protection_score", 0.75)),
+                    float(self.metadata.get("min_protection_score", 0.75)), str(self.metadata.get("caller", "pairs")),
                 )
                 ax.set_ylabel("Protection")
             if what == "pillars":
@@ -934,7 +1176,7 @@ class LocusPillarScan:
             ax_top.set_title(f"{self.chrom}:{L:,}-{R:,}", fontsize=11, loc="left")
 
             _draw_protection(
-                ax_prot, xs, self.protection_score, self.motifs, float(self.metadata.get("min_protection_score", 0.75))
+                ax_prot, xs, self.protection_score, self.motifs, float(self.metadata.get("min_protection_score", 0.75)), str(self.metadata.get("caller", "pairs"))
             )
             ax_prot.set_ylabel("Protection")
             ax_prot.legend(loc="upper right", fontsize=8, ncol=1, framealpha=0.9)
@@ -1026,7 +1268,7 @@ class LocusPillarScan:
         ax2 = axes[2]
         if show_raw_protection:
             ax2.plot(xs, self.raw_log2_protection, color="0.6", lw=0.8, ls=":", label="1-bp profile, unweighted")
-        _draw_protection(ax2, xs, self.protection_score, self.motifs, float(self.metadata.get("min_protection_score", 0.75)))
+        _draw_protection(ax2, xs, self.protection_score, self.motifs, float(self.metadata.get("min_protection_score", 0.75)), str(self.metadata.get("caller", "pairs")))
         if sub_hits is not None:
             for i, (_, h) in enumerate(sub_hits.iterrows()):
                 ax2.axvspan(
@@ -1085,33 +1327,44 @@ def scan_locus_pillars(
     min_pillar_score: float = 8.0,
     min_len_bins: int = 4,
     min_pillar_prominence: float = 2.0,
-    min_protection_score: float = 0.75,
+    min_protection_score: float | None = None,
     min_raw_protection: float = 0.20,
     min_motif_distance: int = 12,
     expected_cuts: np.ndarray | Callable[[str, int, int], np.ndarray] | None = None,
+    caller: str = "profile",
 ) -> LocusPillarScan:
     """Compute continuous 1D/2D cleavage-pillar and footprint-protection profiles and call
-    cut pillars and pair-bracketed protected motifs ``[l, r)`` in a genomic window.
+    cut pillars and protected footprints ``[l, r)`` in a genomic window.
 
     Pillars are detected on ``pillar_score`` and placed on their unsmoothed cut stacks.
-    Motifs are scored only between pairs of called pillars ``r - l`` apart, with ``r - l`` in
-    ``motif_width_range`` (inclusive): ``min_raw_protection`` is the minimum unweighted
-    ``log2((flank + pseudocount) / (core + pseudocount))`` of a pair and
-    ``min_protection_score`` the minimum after TF-coverage weighting.
-    ``footprint_widths`` and ``flank_pad`` only shape the exploratory ``protection_score``
-    profile (see [`LocusPillarScan`][pyvplot.LocusPillarScan]).
+
+    ``caller="profile"`` (default) calls footprints as peaks of the 1-bp ``protection_score``
+    profile, each spanning its best width (from ``footprint_widths`` within
+    ``motif_width_range``), so calls always sit on the profile. ``caller="pairs"`` is the
+    original pillar-pair caller: motifs are scored only between pairs of called pillars
+    ``r - l`` apart, with ``r - l`` in ``motif_width_range`` (inclusive). For both,
+    ``min_raw_protection`` is the minimum unweighted ``log2((flank + pseudocount) / (core +
+    pseudocount))`` and ``min_protection_score`` the minimum after TF-coverage weighting
+    (default 1.0 for ``"profile"``, 0.75 for ``"pairs"``). On KLF5 ChEC-seq, scored against
+    FiNeMo hits of a sequence model, profile peaks gave higher precision and recall than
+    pillar pairs at every call density (``benchmarks/footprints`` in the repository).
 
     For assays with sequence-dependent endonuclease bias (MNase prefers AT-rich DNA, so a
     GC-rich core between AT-rich flanks can look protected), pass per-bp ``expected_cuts``
     of length ``end - start`` (any scale), or a function ``(chrom, start, end) -> array`` such
     as the one [`pillar_expected_cuts`][pyvplot.pillar_expected_cuts] builds from a
-    [`KmerBiasTable`][pyvplot.KmerBiasTable], and calibrate ``min_protection_score`` against a
-    free-MNase / naked-DNA control store.
+    [`KmerBiasTable`][pyvplot.KmerBiasTable]; it divides ``pillar_score`` before both the
+    profile and the calls. A short k-mer table captures only part of MNase's preference (on
+    KLF5 ChEC-seq it predicted a fraction of the cut depletion seen at GC boxes far from any
+    peak), so calibrate ``min_protection_score`` against a free-MNase / naked-DNA control
+    store where one exists.
     """
     if store.is_stranded:
         raise ValueError("scan_locus_pillars requires paired-end fragment intervals; store is stranded.")
     if flank_mode not in {"both", "either"}:
         raise ValueError(f"flank_mode must be 'both' or 'either', got {flank_mode!r}.")
+    _check_caller(caller)
+    min_prot = _default_min_protection(caller, min_protection_score)
 
     chrom, L, R, _ = _parse_region(region, "region")
     min_len, max_len = int(len_range[0]), int(len_range[1])
@@ -1156,60 +1409,10 @@ def scan_locus_pillars(
     n_len_bins = (win_mat >= 1.0).sum(axis=0).astype(np.int32)
 
     cov_weight = _compute_cov_weight(cov_tf)
-
-    prot_2d_scale = np.zeros((len(widths), W), dtype=np.float64)
-    prot_2d_raw = np.zeros((len(widths), W), dtype=np.float64)
-    ps_pad = np.concatenate([[0.0], np.cumsum(pillar_score)])
-    xs = np.arange(W, dtype=np.int64)
-    f_win = 2 * int(flank_pad) + 1
-    p_max_flank = _max_filter_1d(pillar_score, f_win)
     pc = float(pseudocount)
-
-    for idx_w, w in enumerate(widths):
-        half_l = int(w) // 2
-        half_r = int(w) - half_l
-        in_l = max(1, half_l - 2)
-        in_r = max(1, half_r - 2)
-        c_lo = np.clip(xs - in_l, 0, W)
-        c_hi = np.clip(xs + in_r + 1, 0, W)
-        core_mean = (ps_pad[c_hi] - ps_pad[c_lo]) / np.maximum(1, c_hi - c_lo)
-        core_max = _max_filter_1d(pillar_score, in_l + in_r + 1)
-        core_eff = 0.5 * core_mean + 0.5 * core_max
-
-        l_idx = np.clip(xs - half_l, 0, max(0, W - 1))
-        r_idx = np.clip(xs + half_r, 0, max(0, W - 1))
-        flank_l = p_max_flank[l_idx] if W > 0 else np.zeros(0)
-        flank_r = p_max_flank[r_idx] if W > 0 else np.zeros(0)
-
-        f_min = np.minimum(flank_l, flank_r)
-        f_max = np.maximum(flank_l, flank_r)
-        if flank_mode == "both":
-            flank_paired = (np.maximum(0.0, f_min) ** 0.65) * (np.maximum(0.0, f_max) ** 0.35)
-        else:
-            flank_paired = 0.65 * f_max + 0.35 * f_min
-
-        raw_log2 = np.log2((flank_paired + pc) / (core_eff + pc))
-        prot_2d_raw[idx_w] = raw_log2
-        prot_2d_scale[idx_w] = raw_log2 * cov_weight
-
-    w_mask = (widths >= motif_width_range[0]) & (widths <= motif_width_range[1])
-    if not np.any(w_mask):
-        w_mask = np.ones(len(widths), dtype=bool)
-    sub_widths = widths[w_mask]
-    sub_scale = prot_2d_scale[w_mask]
-    sub_raw = prot_2d_raw[w_mask]
-
-    if W > 0:
-        best_w_idx = np.argmax(sub_scale, axis=0)
-        max_scale = sub_scale[best_w_idx, np.arange(W)]
-        mean_scale = sub_scale.mean(axis=0)
-        prot_1d = np.where(max_scale > 0.0, max_scale, mean_scale)
-        prot_1d_raw = np.where(max_scale > 0.0, sub_raw[best_w_idx, np.arange(W)], sub_raw.mean(axis=0))
-        best_widths = sub_widths[best_w_idx]
-    else:
-        prot_1d = np.empty(0, dtype=np.float64)
-        prot_1d_raw = np.empty(0, dtype=np.float64)
-        best_widths = np.empty(0, dtype=np.int32)
+    prot_2d_scale, prot_2d_raw, prot_1d, prot_1d_raw, best_widths = _protection_profile(
+        pillar_score, cov_weight, widths, tuple(motif_width_range), int(flank_pad), flank_mode, pc, exp
+    )
 
     pillars_df, motifs_df = _call_intervals_from_arrays(
         chrom=chrom,
@@ -1229,11 +1432,27 @@ def scan_locus_pillars(
         min_len_bins=int(min_len_bins),
         min_pillar_prominence=float(min_pillar_prominence),
         min_pillar_distance=5,
-        min_protection_score=float(min_protection_score),
+        min_protection_score=min_prot,
         min_raw_protection=float(min_raw_protection),
         min_motif_distance=int(min_motif_distance),
         expected_cuts=exp,
+        call_pairs=caller == "pairs",
     )
+    if caller == "profile":
+        motifs_df = _call_profile_peaks(
+            chrom=chrom,
+            L=L,
+            protection=prot_1d,
+            raw_protection=prot_1d_raw,
+            best_widths=best_widths,
+            pillar_score=pillar_score,
+            cov_tf=cov_tf,
+            flank_pad=int(flank_pad),
+            min_protection_score=min_prot,
+            min_raw_protection=float(min_raw_protection),
+            min_motif_distance=int(min_motif_distance),
+            expected_cuts=exp,
+        )
 
     n_bins = cut_mat.shape[0]
     len_edges = min_len + int(len_bin) * np.arange(n_bins + 1, dtype=np.int64)
@@ -1270,9 +1489,10 @@ def scan_locus_pillars(
             "min_pillar_score": float(min_pillar_score),
             "min_len_bins": int(min_len_bins),
             "min_pillar_prominence": float(min_pillar_prominence),
-            "min_protection_score": float(min_protection_score),
+            "min_protection_score": min_prot,
             "min_raw_protection": float(min_raw_protection),
             "min_motif_distance": int(min_motif_distance),
+            "caller": caller,
         },
         expected_cuts=exp,
     )
@@ -1369,17 +1589,20 @@ def scan_genome_pillars(
     tf_len_range: tuple[int, int] = (20, 120),
     pillar_window: int = 3,
     motif_width_range: tuple[int, int] = (10, 24),
+    footprint_widths: Sequence[int] | np.ndarray | None = None,
+    flank_pad: int = 2,
     min_bin_frags: int = 12,
     flank_mode: str = "both",
     pseudocount: float = 2.0,
     min_pillar_score: float = 8.0,
     min_len_bins: int = 4,
     min_pillar_prominence: float = 2.0,
-    min_protection_score: float = 0.75,
+    min_protection_score: float | None = None,
     min_raw_protection: float = 0.20,
     min_motif_distance: int = 12,
     expected_cuts: Callable[[str, int, int], np.ndarray] | None = None,
     return_pillars: bool = False,
+    caller: str = "profile",
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """Scan active regions across the whole genome (or selected chromosomes) for de-novo
     protected motif footprints ``[l, r)`` and multi-length cut pillars.
@@ -1393,11 +1616,23 @@ def scan_genome_pillars(
     and must return ``end - start`` per-bp sequence-expected cleavage rates (any scale), the
     same as ``scan_locus_pillars(expected_cuts=...)`` for that window. A callable, because
     a genome-length array would not fit in memory.
+
+    ``caller``, ``footprint_widths``, ``flank_pad`` and the thresholds mean the same as in
+    ``scan_locus_pillars``; with the default ``caller="profile"`` each window's 1-bp
+    protection profile is computed and its peaks are called.
     """
     if store.is_stranded:
         raise ValueError("scan_genome_pillars requires paired-end fragment intervals; store is stranded.")
     if flank_mode not in {"both", "either"}:
         raise ValueError(f"flank_mode must be 'both' or 'either', got {flank_mode!r}.")
+    _check_caller(caller)
+    min_prot = _default_min_protection(caller, min_protection_score)
+    if footprint_widths is None:
+        widths = np.arange(8, 36, 1, dtype=np.int32)
+    else:
+        widths = np.asarray(list(footprint_widths), dtype=np.int32)
+        if len(widths) == 0 or np.any(widths < 4):
+            raise ValueError("`footprint_widths` must contain integers >= 4.")
     min_len, max_len = int(len_range[0]), int(len_range[1])
     if max_len <= min_len or len_bin <= 0:
         raise ValueError("`len_range` must have max_len > min_len and `len_bin` > 0.")
@@ -1438,6 +1673,8 @@ def scan_genome_pillars(
             pillar_score = log_mat.sum(axis=0)
             n_len_bins = (win_mat >= 1.0).sum(axis=0).astype(np.int32)
 
+            exp_w = None if expected_cuts is None else np.asarray(expected_cuts(chrom, int(w0), int(w1)), dtype=np.float64)
+            cov_weight = _compute_cov_weight(cov_tf)
             p_df, m_df = _call_intervals_from_arrays(
                 chrom=chrom,
                 L=w0,
@@ -1447,6 +1684,7 @@ def scan_genome_pillars(
                 left_cuts=left_cuts,
                 right_cuts=right_cuts,
                 cov_tf=cov_tf,
+                cov_weight=cov_weight,
                 motif_width_range=tuple(motif_width_range),
                 flank_mode=flank_mode,
                 pseudocount=float(pseudocount),
@@ -1455,11 +1693,31 @@ def scan_genome_pillars(
                 min_len_bins=int(min_len_bins),
                 min_pillar_prominence=float(min_pillar_prominence),
                 min_pillar_distance=5,
-                min_protection_score=float(min_protection_score),
+                min_protection_score=min_prot,
                 min_raw_protection=float(min_raw_protection),
                 min_motif_distance=int(min_motif_distance),
-                expected_cuts=None if expected_cuts is None else expected_cuts(chrom, int(w0), int(w1)),
+                expected_cuts=exp_w,
+                call_pairs=caller == "pairs",
             )
+            if caller == "profile":
+                _, _, p1, p1r, bw = _protection_profile(
+                    pillar_score, cov_weight, widths, tuple(motif_width_range), int(flank_pad),
+                    flank_mode, float(pseudocount), exp_w,
+                )
+                m_df = _call_profile_peaks(
+                    chrom=chrom,
+                    L=w0,
+                    protection=p1,
+                    raw_protection=p1r,
+                    best_widths=bw,
+                    pillar_score=pillar_score,
+                    cov_tf=cov_tf,
+                    flank_pad=int(flank_pad),
+                    min_protection_score=min_prot,
+                    min_raw_protection=float(min_raw_protection),
+                    min_motif_distance=int(min_motif_distance),
+                    expected_cuts=exp_w,
+                )
             if len(m_df) > 0:
                 motif_frames.append(m_df)
             if return_pillars and len(p_df) > 0:
