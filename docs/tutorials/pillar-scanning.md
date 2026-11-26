@@ -188,7 +188,7 @@ print(expected("chr1", 5000, 5004).round(2), len(scan_b.motifs), len(motifs_b))
 
 `expected(chrom, start, end)` gives, at each boundary, the propensity of a fragment starting there plus that of one ending there. The scanner rescales it to mean 1 per window and divides `pillar_score` by it before computing the profile and scoring calls; pillars themselves are still called on the uncorrected score. `scan.call()` reuses the scan's correction, and `scan.call(expected_cuts=...)` recomputes the profile with a new one. Here the table is random, so the correction mostly adds noise: three weak extra calls appear. On a simulated naked-DNA store with strong 4-mer bias and no bound sites, the correction cut false calls of the pair caller from 58 to 9.
 
-A short k-mer table does not capture all of the enzyme's preference. On KLF5 ChEC-seq, a 6-mer table fitted on the library's own cuts away from peaks predicted cores at the commonest KLF 9-mers cut at about 0.6–0.7 of their flanks; the same 9-mers far from any peak were cut at 0.07–0.12. MNase barely cuts long GC runs, bound or not.
+Fit the table on DNA the factor does not bind. On KLF5 ChEC-seq, cuts "away from peaks" were not unbound: in DNA at least 2 kb from any peak tile and outside every active window, 9-mers resembling the KLF site were about twice as depleted, and had about twice as many short-fragment midpoints centred on them, as other 9-mers of the same GC content. A 6-mer table fitted there (k-mers masked as `N` around peaks) predicted those cores cut at 0.6–0.7 of their flanks, against 0.24–0.31 observed. Part of that gap is weak binding the table cannot see, and part is GC-rich cores the table underpredicts. A free-MNase or naked-DNA control, or a table fitted with the factor's motif matches masked, avoids absorbing binding into the bias.
 
 ## Calibrating on a control
 
@@ -235,6 +235,7 @@ Below 0.75 the control calls about as much as the sample, so those calls are noi
 On KLF5 ChEC-seq (64 M fragments), scored inside 64k ISM tiles against FiNeMo hits called on a sequence model's attributions (`benchmarks/footprints` in the repository):
 
 - Profile peaks sat on hit centres (median offset −0.5 bp) and beat the pair caller at every call density: at about 10 calls/kb, 29% precision and 34% recall against 22% and 20% for pairs at 7.7/kb (random placement: 8%).
-- Much of the signal is sequence. The GC fraction of 10 bp alone separated hit centres from other positions better than the profile (AUROC 0.85 against 0.74–0.77). Within bins matched for both coverage and GC the profile still reached 0.70, so it carries information beyond composition.
+- GC content alone separated hit centres from other positions better than the profile (AUROC 0.85 against 0.74–0.77). Part of that is circular, since the hits are GC boxes by construction, and part is cleavage preference. Within bins matched for both coverage and GC, the profile still reached 0.70.
+- Short fragments centred on the site are the more motif-specific readout. At the same 9-mer, short-fragment midpoints were enriched about 4× over local background at hits against about 2× in peak tiles without a hit, where cut depletion could not tell the two apart (0.013 against 0.014 of flank).
 
 Read a footprint as occupancy only after comparing it with a sequence-only baseline (GC or k-mer expected cuts) or a free-MNase control.

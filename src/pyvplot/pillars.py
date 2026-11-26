@@ -763,9 +763,9 @@ class LocusPillarScan:
     profile peak need not be called and a call need not sit on a peak.
 
     The profile measures depletion of cuts, which also follows the enzyme's sequence
-    preference: MNase rarely cuts GC-rich DNA, so a GC box can look protected whether or not
-    it is bound. Pass ``expected_cuts`` and compare against a sequence-only baseline before
-    reading a footprint as occupancy.
+    preference: MNase cuts GC-rich DNA less, so part of a GC box's depletion is there whether
+    or not it is bound. Pass ``expected_cuts`` and compare against a sequence-only baseline
+    before reading a footprint as occupancy.
     """
 
     chrom: str
@@ -1355,10 +1355,10 @@ def scan_locus_pillars(
     of length ``end - start`` (any scale), or a function ``(chrom, start, end) -> array`` such
     as the one [`pillar_expected_cuts`][pyvplot.pillar_expected_cuts] builds from a
     [`KmerBiasTable`][pyvplot.KmerBiasTable]; it divides ``pillar_score`` before both the
-    profile and the calls. A short k-mer table captures only part of MNase's preference (on
-    KLF5 ChEC-seq it predicted a fraction of the cut depletion seen at GC boxes far from any
-    peak), so calibrate ``min_protection_score`` against a free-MNase / naked-DNA control
-    store where one exists.
+    profile and the calls. Fit the table on DNA the factor does not bind: cuts away from peaks
+    can still carry weak binding (on KLF5 ChEC-seq, off-peak KLF-like 9-mers were twice as
+    depleted as other 9-mers of the same GC), which a table fitted there absorbs. Calibrate
+    ``min_protection_score`` against a free-MNase / naked-DNA control store where one exists.
     """
     if store.is_stranded:
         raise ValueError("scan_locus_pillars requires paired-end fragment intervals; store is stranded.")
