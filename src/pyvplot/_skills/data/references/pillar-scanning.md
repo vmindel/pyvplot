@@ -44,7 +44,7 @@ motifs, pillars = store.scan_genome_pillars(min_protection_score=1.0, expected_c
 
 ## Thresholds, in the order they act
 
-`min_pillar_score` (8.0), `min_len_bins` (4), `min_pillar_prominence` (2.0) define pillars; `footprint_widths` (8–35) and `flank_pad` (2) shape the profile; `motif_width_range` ((10, 24), inclusive) limits call widths (pairs: exact pair widths); `min_raw_protection` (0.20) and `min_protection_score` (1.0 profile / 0.75 pairs) filter calls; `min_motif_distance` (12) suppresses close calls, keeping the best.
+`min_pillar_score` (8.0), `min_len_bins` (4), `min_pillar_prominence` (2.0) define pillars; `footprint_widths` (8–35) and `flank_pad` (2) shape the profile; `motif_width_range` ((10, 24), inclusive) limits call widths (pairs: exact; profile: the best width, then edge snapping can change it by up to `2 * flank_pad`); `min_raw_protection` (0.20) and `min_protection_score` (1.0 profile / 0.75 pairs) filter calls; `min_motif_distance` (12) suppresses close calls, keeping the best.
 
 ## Footguns
 

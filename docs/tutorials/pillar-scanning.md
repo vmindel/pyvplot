@@ -143,7 +143,7 @@ The thresholds, in the order they act:
 
 - `min_pillar_score` (8.0), `min_len_bins` (4), `min_pillar_prominence` (2.0): what counts as a pillar.
 - `footprint_widths` (8–35) and `flank_pad` (2): the widths the profile tries and how far from each edge it looks for the flank pillar.
-- `motif_width_range` ((10, 24), inclusive): the widths a call may have (profile: which widths compete for the best; pairs: which pillar pairs are scored at all).
+- `motif_width_range` ((10, 24), inclusive): pairs: which pillar pairs are scored at all, so call widths are exact; profile: which widths compete for the best, after which snapping each edge can change a call's width by up to `2 * flank_pad`.
 - `min_raw_protection` (0.20): minimum `raw_log2_protection`.
 - `min_protection_score` (1.0 for `caller="profile"`, 0.75 for `"pairs"`): minimum after coverage weighting.
 - `min_motif_distance` (12): calls closer than this keep only the best (pairs also drop overlapping calls).

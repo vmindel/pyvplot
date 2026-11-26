@@ -1340,7 +1340,8 @@ def scan_locus_pillars(
 
     ``caller="profile"`` (default) calls footprints as peaks of the 1-bp ``protection_score``
     profile, each spanning its best width (from ``footprint_widths`` within
-    ``motif_width_range``), so calls always sit on the profile. ``caller="pairs"`` is the
+    ``motif_width_range``; snapping each edge to its flank pillar can change the width by up
+    to ``2 * flank_pad``), so calls always sit on the profile. ``caller="pairs"`` is the
     original pillar-pair caller: motifs are scored only between pairs of called pillars
     ``r - l`` apart, with ``r - l`` in ``motif_width_range`` (inclusive). For both,
     ``min_raw_protection`` is the minimum unweighted ``log2((flank + pseudocount) / (core +
