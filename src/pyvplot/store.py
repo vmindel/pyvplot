@@ -1584,10 +1584,11 @@ class FragmentStore:
         min_pillar_score: float = 8.0,
         min_len_bins: int = 4,
         min_pillar_prominence: float = 2.0,
-        min_protection_score: float = 0.75,
+        min_protection_score: float | None = None,
         min_raw_protection: float = 0.20,
         min_motif_distance: int = 12,
         expected_cuts: np.ndarray | Callable[[str, int, int], np.ndarray] | None = None,
+        caller: str = "profile",
     ) -> LocusPillarScan:
         """Scan one window for multi-length cut pillars and protected motifs. Same as [`pyvplot.scan_locus_pillars`][pyvplot.scan_locus_pillars]."""
         from pyvplot.pillars import scan_locus_pillars
@@ -1611,6 +1612,7 @@ class FragmentStore:
             min_raw_protection=min_raw_protection,
             min_motif_distance=min_motif_distance,
             expected_cuts=expected_cuts,
+            caller=caller,
         )
 
     def scan_genome_pillars(
@@ -1622,17 +1624,20 @@ class FragmentStore:
         tf_len_range: tuple[int, int] = (20, 120),
         pillar_window: int = 3,
         motif_width_range: tuple[int, int] = (10, 24),
+        footprint_widths: Sequence[int] | np.ndarray | None = None,
+        flank_pad: int = 2,
         min_bin_frags: int = 12,
         flank_mode: str = "both",
         pseudocount: float = 2.0,
         min_pillar_score: float = 8.0,
         min_len_bins: int = 4,
         min_pillar_prominence: float = 2.0,
-        min_protection_score: float = 0.75,
+        min_protection_score: float | None = None,
         min_raw_protection: float = 0.20,
         min_motif_distance: int = 12,
         expected_cuts: Callable[[str, int, int], np.ndarray] | None = None,
         return_pillars: bool = False,
+        caller: str = "profile",
     ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
         """Scan active windows genome-wide for protected motifs and cut pillars. Same as [`pyvplot.scan_genome_pillars`][pyvplot.scan_genome_pillars]."""
         from pyvplot.pillars import scan_genome_pillars
@@ -1645,6 +1650,8 @@ class FragmentStore:
             tf_len_range=tf_len_range,
             pillar_window=pillar_window,
             motif_width_range=motif_width_range,
+            footprint_widths=footprint_widths,
+            flank_pad=flank_pad,
             min_bin_frags=min_bin_frags,
             flank_mode=flank_mode,
             pseudocount=pseudocount,
@@ -1656,6 +1663,7 @@ class FragmentStore:
             min_motif_distance=min_motif_distance,
             expected_cuts=expected_cuts,
             return_pillars=return_pillars,
+            caller=caller,
         )
 
     @classmethod

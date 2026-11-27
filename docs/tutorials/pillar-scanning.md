@@ -1,10 +1,10 @@
 # De-novo footprints from cut pillars
 
-When you do not know where a factor binds, the fragments can still show it. Around a bound protein, fragment ends of many different lengths stop at the same two boundaries, one either side of it, and the DNA between them is not cut. pyvplot calls those boundaries **cut pillars** and calls a **protected motif** between a pair of them. The scanner needs paired-end fragments; stranded stores (ChIP-exo) raise an error.
+When you do not know where a factor binds, the fragments can still show it. Around a bound protein, fragment ends of many different lengths stop at the same two boundaries, one either side of it, and the DNA between them is not cut. pyvplot calls those boundaries **cut pillars**, scores every position for an uncut core between strong flanks (the 1-bp **protection profile**), and calls **protected footprints** at the peaks of that profile. The scanner needs paired-end fragments; stranded stores (ChIP-exo) raise an error.
 
 ## Coordinates
 
-Every 1-bp array of a scan is indexed by cut boundary: index `p` is the boundary at genomic `L + p`, between bases `L + p - 1` and `L + p`. A fragment `[s, e)` adds a left cut at `s` and a right cut at `e`. A motif between pillars at `l` and `r` covers the protected bases `[l, r)`, so its `start` is the left pillar and its `end` the right one.
+Every 1-bp array of a scan is indexed by cut boundary: index `p` is the boundary at genomic `L + p`, between bases `L + p - 1` and `L + p`. A fragment `[s, e)` adds a left cut at `s` and a right cut at `e`. A footprint `[l, r)` covers the protected bases between its flank boundaries `l` and `r`.
 
 ## One locus
 
@@ -45,11 +45,24 @@ print(scan.motifs[["start", "end", "width", "protection_score", "raw_log2_protec
 ```text
 LocusPillarScan(chr1:4800-5500, n_pillars=85, n_motifs=2)
  start  end  width  protection_score  raw_log2_protection  composite_score
-  5000 5016     16              1.81                 2.23            68.36
-  5300 5312     12              1.99                 2.55            71.02
+  5000 5015     15              1.83                 2.26            69.51
+  5300 5313     13              2.11                 2.70            76.11
 ```
 
-Both sites come back exactly. Most of the 85 pillars are background stacks that never pair up across a depleted core; the two flanks of the first site stand out by `pillar_score` and by how many length bins they span:
+`caller="pairs"` is the original caller: it scores only pairs of called pillars `r - l` apart with `r - l` in `motif_width_range`, so on clean data like this it returns the pillar boundaries exactly. On KLF5 ChEC-seq, scored against FiNeMo hits from a sequence model, profile peaks had higher precision and recall at every call density (see *Real data* below), which is why `"profile"` is the default.
+
+```python
+pairs = frags.scan_locus_pillars("chr1:4800-5500", caller="pairs")
+print(pairs.motifs[["start", "end", "width", "protection_score"]].round(2).to_string(index=False))
+```
+
+```text
+ start  end  width  protection_score
+  5000 5016     16              1.81
+  5300 5312     12              1.99
+```
+
+Both sites are found, centred on the planted ones; each edge lands on the tallest pillar within `flank_pad` (2 bp) of the profile's best width, here within 1 bp of the planted boundary. Most of the 85 pillars are background stacks with no depleted core next to them; the two flanks of the first site stand out by `pillar_score` and by how many length bins they span:
 
 ```python
 near = scan.pillars[(scan.pillars["pos"] - 5150).abs() < 200]
@@ -76,28 +89,29 @@ print(near[["pos", "pillar_score", "n_len_bins", "left_frac", "strand"]].round(2
 fig, axes = scan.plot(store=frags)
 ```
 
-![Pillar scan of chr1:4800-5500: fragment ends by length, pair scores of the two called motifs against the threshold, pillar score, and short-fragment coverage](../img/pillar_scan_locus.png)
+![Pillar scan of chr1:4800-5500: fragment ends by length, the protection profile with the two calls against the threshold, pillar score, and short-fragment coverage](../img/pillar_scan_locus.png)
 
 - **Fragment ends by length.** Each fragment contributes its start (red) and end (dark blue). A pillar is a vertical stack: ends of every length stopping at one boundary. Diagonals are fragments sharing their other end.
-- **Protection.** Each called motif is a dark bar spanning `[start, end)` at its pair `protection_score`; calls are the bars above the red `min_protection_score` line. The grey 1-bp profile is context only. It dips below zero on the pillars and is not what calls are made from.
-- **Pillar score.** Red dots are called pillars. Only pairs of tall pillars with a depleted core between them become motifs, which is why the 81 background pillars produce nothing.
-- **TF-size coverage.** Short (20–120 bp) fragments covering each position, which weights the pair score.
+- **Protection.** The grey 1-bp profile, and each call as a dark bar spanning `[start, end)` at its `protection_score`, above the red `min_protection_score` line. With the default caller the bars sit on the profile's peaks; the profile dips below zero on the pillars themselves.
+- **Pillar score.** Red dots are called pillars. Only a depleted core between tall flanks scores high, which is why the 81 background pillars produce nothing.
+- **TF-size coverage.** Short (20–120 bp) fragments covering each position, which weights the protection score.
 
 Without `store=`, the top panel shows the length-resolved cut matrix instead. `scan.plot(ax=ax)` draws the protection track alone into an existing axis, for multi-track figures; `scan.plot(mode="multiscale")` adds the width-resolved protection profile.
 
 ## What the tables hold
 
-`scan.motifs`, one row per called motif:
+`scan.motifs`, one row per call (the same columns for both callers):
 
 | column | meaning |
 |---|---|
-| `start`, `end`, `width` | protected interval `[l, r)` between the two pillars; `width = r - l` |
-| `center` | `(l + r) // 2` |
-| `raw_log2_protection` | `log2((flank + pseudocount) / (core + pseudocount))`: flank is a weighted geometric mean of the two pillar scores, core the mean of the average and the maximum `pillar_score` strictly inside the pair |
+| `start`, `end`, `width` | protected interval `[l, r)`; `width = r - l`. Profile caller: the peak's best width, each edge moved to the tallest pillar within `flank_pad`. Pair caller: the two pillars |
+| `center` | profile caller: the profile peak; pair caller: `(l + r) // 2` |
+| `raw_log2_protection` | `log2((flank + pseudocount) / (core + pseudocount))`: flank combines the two flank pillar scores (`flank_mode`), core is the mean of the average and the maximum `pillar_score` inside |
 | `protection_score` | `raw_log2_protection` times a 0–1 weight for short-fragment (TF-size) coverage at `center` |
-| `left_pillar_score`, `right_pillar_score`, `core_pillar_score` | `pillar_score` at `l`, `r` and `center` |
+| `left_pillar_score`, `right_pillar_score`, `core_pillar_score` | `pillar_score` at `l`, `r` and `center` (divided by the expected rate with `expected_cuts`) |
 | `tf_coverage` | short fragments covering `center` |
 | `composite_score` | `protection_score * log2(1 + mean flank) * log2(1 + tf_coverage)`; the genome scan sorts by it |
+| `occupancy_score` | `scan.occupancy_score` at `center` (below); not used for calling |
 
 `scan.pillars`, one row per called pillar:
 
@@ -109,11 +123,30 @@ Without `store=`, the top panel shows the length-resolved cut matrix instead. `s
 | `n_len_bins` | length bins with at least one cut there |
 | `left_cuts`, `right_cuts`, `left_frac`, `strand` | fragment starts and ends at the pillar; `strand` is `+` when starts dominate, as on the right flank of a bound site |
 
-`scan.protection_score`, `protection_2d` and `best_widths` are a separate sliding-window profile for plotting and tracks. Motifs are not called from it, so a peak in it need not be a call.
+`scan.protection_score` is the 1-bp profile: at each boundary, the best over `footprint_widths` (restricted to `motif_width_range`) of the coverage-weighted depletion score; `protection_2d` holds every width and `best_widths` the winner. The default caller calls its peaks; with `caller="pairs"` it is context only.
+
+## Occupancy from bracketing fragments
+
+Depletion asks for an uncut core, and the enzyme's sequence preference can produce one with nothing bound ([Sequence bias](#sequence-bias)). ChEC also reads binding out a second way: the tethered nuclease cuts on both sides of the factor, so a bound site sits inside many short fragments whose two ends fall a few bp to either side of it. `scan.occupancy_score` counts, at each boundary `c`, the 20–120 bp fragments (`tf_len_range`) that start in `[c - 60, c - 5]` and end in `[c + 5, c + 60]`. It scores that count against its mean at `c ± [40, 150]` as a signed Poisson log-likelihood ratio, which grows with depth. `vp.occupancy_profile()` computes the same track for any region without a scan, with other windows, or as `score="log2"` (a depth-free ratio) or `score="counts"`:
+
+```python
+occ = vp.occupancy_profile(frags, "chr1:4800-5500")
+print(bool((occ == scan.occupancy_score).all()))
+print(scan.motifs[["start", "end", "protection_score", "occupancy_score"]].round(1).to_string(index=False))
+```
+
+```text
+True
+ start  end  protection_score  occupancy_score
+  5000 5015               1.8              8.3
+  5300 5313               2.1              4.6
+```
+
+`scan.plot(ax=ax, what="occupancy")` draws the track with the calls as dots, and `to_track_df("occupancy_score")` exports it. On KLF5 ChEC-seq, the occupancy track separated KLF sites from other positions of the same coverage and GC content better than the protection profile, but its peaks are broad: only about a quarter fell within 3 bp of the site, against two thirds for protection. Rank or weight footprints by it, and place them with the protection profile.
 
 ## Thresholds and re-calling
 
-`call()` re-calls pillars and motifs from the stored arrays without touching the fragments:
+`call()` re-calls pillars and footprints from the stored arrays without touching the fragments, and `call(caller="pairs")` switches caller:
 
 ```python
 for thr in (1.0, 1.9, 2.5):
@@ -121,18 +154,19 @@ for thr in (1.0, 1.9, 2.5):
 ```
 
 ```text
-1.0 [[5000, 5016], [5300, 5312]]
-1.9 [[5300, 5312]]
+1.0 [[5000, 5015], [5300, 5313]]
+1.9 [[5300, 5313]]
 2.5 []
 ```
 
 The thresholds, in the order they act:
 
 - `min_pillar_score` (8.0), `min_len_bins` (4), `min_pillar_prominence` (2.0): what counts as a pillar.
-- `motif_width_range` ((10, 24), inclusive): which pillar pairs are scored at all.
-- `min_raw_protection` (0.20): minimum `raw_log2_protection` of a pair.
-- `min_protection_score` (0.75): minimum after coverage weighting.
-- `min_motif_distance` (12): overlapping pairs and centres closer than this keep only the best.
+- `footprint_widths` (8–35) and `flank_pad` (2): the widths the profile tries and how far from each edge it looks for the flank pillar.
+- `motif_width_range` ((10, 24), inclusive): pairs: which pillar pairs are scored at all, so call widths are exact; profile: which widths compete for the best, after which snapping each edge can change a call's width by up to `2 * flank_pad`.
+- `min_raw_protection` (0.20): minimum `raw_log2_protection`.
+- `min_protection_score` (1.0 for `caller="profile"`, 0.75 for `"pairs"`): minimum after coverage weighting.
+- `min_motif_distance` (12): calls closer than this keep only the best (pairs also drop overlapping calls).
 
 `pillar_score` is a sum of log counts, so the pillar thresholds mean less at higher depth and more at lower depth. Calibrate them on each dataset (below) rather than reusing numbers between libraries.
 
@@ -140,7 +174,7 @@ The thresholds, in the order they act:
 
 ## Genome-wide
 
-`scan_genome_pillars()` finds active windows (50-bp bins with at least `min_bin_frags` short-fragment midpoints, padded and merged) and scans each with the same calling as `scan_locus_pillars`. It returns motifs sorted by `composite_score`, and pillars too with `return_pillars=True`:
+`scan_genome_pillars()` finds active windows (50-bp bins with at least `min_bin_frags` short-fragment midpoints, padded and merged) and scans each with the same profile and calling as `scan_locus_pillars` (`caller`, `footprint_widths` and `flank_pad` included). It returns motifs sorted by `composite_score`, and pillars too with `return_pillars=True`:
 
 ```python
 motifs, pillars = frags.scan_genome_pillars(return_pillars=True)
@@ -149,8 +183,8 @@ print(motifs[["chrom", "start", "end", "width", "composite_score"]].round(1).to_
 
 ```text
 chrom  start  end  width  composite_score
- chr1   5300 5312     12             71.0
- chr1   5000 5016     16             68.4
+ chr1   5300 5313     13             76.1
+ chr1   5000 5015     15             69.5
 ```
 
 ## Sequence bias
@@ -169,10 +203,12 @@ print(expected("chr1", 5000, 5004).round(2), len(scan_b.motifs), len(motifs_b))
 ```
 
 ```text
-[1.18 2.47 2.46 2.44] 2 2
+[1.18 2.47 2.46 2.44] 5 5
 ```
 
-`expected(chrom, start, end)` gives, at each boundary, the propensity of a fragment starting there plus that of one ending there. The scanner rescales it to mean 1 per window and divides `pillar_score` by it before scoring pillar pairs; pillars themselves are still called on the uncorrected score. `scan.call()` reuses the scan's correction. On a simulated naked-DNA store with strong 4-mer bias and no bound sites, this cut false motif calls from 58 to 9.
+`expected(chrom, start, end)` gives, at each boundary, the propensity of a fragment starting there plus that of one ending there. The scanner rescales it to mean 1 per window and divides `pillar_score` by it before computing the profile and scoring calls; pillars themselves are still called on the uncorrected score. `scan.call()` reuses the scan's correction, and `scan.call(expected_cuts=...)` recomputes the profile with a new one. Here the table is random, so the correction mostly adds noise: three weak extra calls appear. On a simulated naked-DNA store with strong 4-mer bias and no bound sites, the correction cut false calls of the pair caller from 58 to 9.
+
+Fit the table on DNA the factor does not bind. On KLF5 ChEC-seq, cuts "away from peaks" were not unbound: in DNA at least 2 kb from any peak tile and outside every active window, 9-mers resembling the KLF site were about twice as depleted, and had about twice as many short-fragment midpoints centred on them, as other 9-mers of the same GC content. A 6-mer table fitted there (k-mers masked as `N` around peaks) predicted those cores cut at 0.6–0.7 of their flanks, against 0.24–0.31 observed. Part of that gap is weak binding the table cannot see, and part is GC-rich cores the table underpredicts. A free-MNase or naked-DNA control, or a table fitted with the factor's motif matches masked, avoids absorbing binding into the bias. `KmerBiasTable.from_cuts(store, genome, exclude=intervals)` drops every k-mer that overlaps a `chrom, start, end` interval from both the observed and the background counts, so peaks and motif matches can be left out of a fit on the sample's own cuts. On KLF5 ChEC-seq, leaving out the top 1% of KLF-like 9-mers as well moved the table's expected core/flank ratio at held-out KLF-like 9-mers with 8 GC from 0.68 to 0.77 (observed 0.24). That is more than an equal-sized, GC-matched mask of other 9-mers moved it. Footprint calls were equally good with either table: slightly better than with no correction at all. Most of the depletion at GC-rich sites is something no 6-mer table predicts.
 
 ## Calibrating on a control
 
@@ -196,20 +232,30 @@ for thr in (0.25, 0.5, 0.75, 1.0, 1.5):
 ```
 
 ```text
-0.25  sample  39  control  34
-0.50  sample   6  control   8
-0.75  sample   2  control   1
+0.25  sample  87  control  91
+0.50  sample  13  control  14
+0.75  sample   5  control   1
 1.00  sample   2  control   0
 1.50  sample   2  control   0
 ```
 
 ![Motif calls at or above each min_protection_score for the sample and a background-only control](../img/pillar_calibration.png)
 
-Below 0.75 the control calls about as much as the sample, so those calls are noise; at the default 0.75 the control still makes one; from 1.0 only the two real sites remain. Here `min_protection_score=1.0` is the choice. The control's count at a threshold divided by the sample's estimates the false discovery rate there. Use the same `expected_cuts` and window settings for both scans.
+Below 0.75 the control calls about as much as the sample, so those calls are noise; at 0.75 the control still makes one; from 1.0, the default, only the two real sites remain. The control's count at a threshold divided by the sample's estimates the false discovery rate there. Use the same `expected_cuts` and window settings for both scans.
 
 ## Limits
 
-- Closely packed footprints: the stretch between two neighbouring sites is bounded by pillars on both sides. If it is also uncut it is called as a motif of its own. Check widths and motif content before treating every call as a binding site.
-- Calls are only as good as the pillars. A bound site with cuts on one side only is not called; `flank_mode="either"` relaxes how the two flanks combine but still needs a called pillar on each side.
+- Closely packed footprints: the stretch between two neighbouring sites is bounded by pillars on both sides. If it is also uncut it is called as a footprint of its own. Check widths and motif content before treating every call as a binding site.
+- With `caller="pairs"` a bound site with cuts on one side only is not called; `flank_mode="either"` relaxes how the two flanks combine but still needs a called pillar on each side. The profile caller only needs the flank scores, not called pillars.
+- Profile-caller edges are approximate (here within 1 bp); use `caller="pairs"` when exact pillar boundaries matter more than sensitivity.
 - `min_pillar_distance` is 5 bp in both scans; only `call()` changes it.
-- Validated so far on simulated data. On real data, check that calls are enriched for the expected motif against matched flanks.
+
+## Real data
+
+On KLF5 ChEC-seq (64 M fragments), scored inside 64k ISM tiles against FiNeMo hits called on a sequence model's attributions (`benchmarks/footprints` in the repository):
+
+- Profile peaks sat on hit centres (median offset −0.5 bp) and beat the pair caller at every call density: at about 10 calls/kb, 29% precision and 34% recall against 22% and 20% for pairs at 7.7/kb (random placement: 8%).
+- GC content alone separated hit centres from other positions better than the profile (AUROC 0.85 against 0.74–0.77). Part of that is circular, since the hits are GC boxes by construction, and part is cleavage preference. Within bins matched for both coverage and GC, the profile still reached 0.70.
+- Short fragments centred on the site are the more motif-specific readout. At the same 9-mer, short-fragment midpoints were enriched about 4× over local background at hits against about 2× in peak tiles without a hit, where cut depletion could not tell the two apart (0.013 against 0.014 of flank).
+
+Read a footprint as occupancy only after comparing it with a sequence-only baseline (GC or k-mer expected cuts) or a free-MNase control.
